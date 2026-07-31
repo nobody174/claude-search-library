@@ -526,6 +526,208 @@ class Storage:
             for row in rows
         ]
 
+    # ---- Archive verification -----------------------------------------
+
+    def verify_archive(self, verbose: bool = False) -> dict:
+        """Comprehensive archive integrity check.
+
+        Runs 7 checks (DB integrity, session/summary/index count
+        consistency, per-session raw-file + content-hash verification,
+        raw chat file presence, JSONL mirror validity, sync_metadata
+        sanity, and FTS5 index status) and returns a structured report:
+
+            {
+                "healthy": bool,
+                "checks_passed": int,
+                "checks_failed": int,
+                "errors": [...],
+                "warnings": [...],
+                "stats": {...},
+                "timestamp": "...",
+            }
+
+        A failed check (exception, corrupt DB, bad JSON) increments
+        checks_failed and appends to errors. A completed check that finds
+        something worth flagging but not fatal (missing JSONL mirror not
+        yet created, FTS5 index not yet built) still counts as passed and
+        appends to warnings instead. `healthy` is True iff errors is empty
+        — warnings alone do not make the archive unhealthy.
+        """
+        errors: list = []
+        warnings: list = []
+        checks_passed = 0
+        checks_failed = 0
+        stats: dict = {}
+
+        def _log(step: str, total: int, label: str) -> None:
+            if verbose:
+                print(f"Check {step}/{total}: {label}...")
+
+        total_checks = 7
+
+        # Check 1: Database integrity
+        _log(1, total_checks, "Database integrity")
+        try:
+            result = self.conn.execute("PRAGMA integrity_check").fetchone()
+            if result[0] != "ok":
+                errors.append(f"Database integrity check failed: {result[0]}")
+                checks_failed += 1
+            else:
+                checks_passed += 1
+        except Exception as e:
+            errors.append(f"Database integrity check error: {e}")
+            checks_failed += 1
+
+        # Check 2: Session/summary/search_index count consistency
+        _log(2, total_checks, "Session count consistency")
+        try:
+            sessions = self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            summaries = self.conn.execute("SELECT COUNT(*) FROM summaries").fetchone()[0]
+            index_rows = self.conn.execute("SELECT COUNT(*) FROM search_index").fetchone()[0]
+
+            stats["total_sessions"] = sessions
+            stats["total_summaries"] = summaries
+            stats["total_search_index_rows"] = index_rows
+
+            if sessions != summaries:
+                warnings.append(f"Session/summary mismatch: {sessions} sessions but {summaries} summaries")
+            if sessions != index_rows:
+                warnings.append(f"Session/search_index mismatch: {sessions} sessions but {index_rows} index rows")
+
+            checks_passed += 1
+        except Exception as e:
+            errors.append(f"Session count check error: {e}")
+            checks_failed += 1
+
+        # Check 3: Content hash validation — re-hash each session's raw
+        # file (when present) and compare to the stored content_hash.
+        _log(3, total_checks, "Content hash validation")
+        try:
+            samples = self.conn.execute(
+                "SELECT id, content_hash, raw_file_path FROM sessions WHERE content_hash IS NOT NULL"
+            ).fetchall()
+
+            checked = 0
+            mismatches = 0
+            missing_raw_files = 0
+            for row in samples:
+                raw_path = row["raw_file_path"]
+                if not raw_path or not os.path.exists(raw_path):
+                    missing_raw_files += 1
+                    continue
+                try:
+                    with open(raw_path, "r", encoding="utf-8") as f:
+                        raw_session = json.load(f)
+                except (OSError, json.JSONDecodeError) as e:
+                    warnings.append(f"Session {row['id']}: could not read/parse raw file for hash check ({e})")
+                    continue
+
+                recomputed = compute_session_hash(raw_session)
+                checked += 1
+                if recomputed != row["content_hash"]:
+                    mismatches += 1
+                    errors.append(f"Session {row['id']}: content hash mismatch (raw file may have changed)")
+
+            stats["hash_samples_checked"] = checked
+            stats["hash_samples_valid"] = checked - mismatches
+            if missing_raw_files:
+                warnings.append(f"{missing_raw_files} session(s) have no readable raw file to verify hash against")
+
+            checks_passed += 1
+        except Exception as e:
+            errors.append(f"Hash validation error: {e}")
+            checks_failed += 1
+
+        # Check 4: Raw chat files exist for every session that references one
+        _log(4, total_checks, "Raw chat files validation")
+        try:
+            rows = self.conn.execute(
+                "SELECT id, raw_file_path FROM sessions WHERE raw_file_path IS NOT NULL"
+            ).fetchall()
+            missing = [r["id"] for r in rows if not os.path.exists(r["raw_file_path"])]
+
+            stats["sessions_with_raw_path"] = len(rows)
+            stats["raw_chat_files_missing"] = len(missing)
+            if missing:
+                warnings.append(f"{len(missing)} session(s) reference a raw chat file that no longer exists")
+
+            checks_passed += 1
+        except Exception as e:
+            errors.append(f"Raw chat files check error: {e}")
+            checks_failed += 1
+
+        # Check 5: JSONL mirror is readable and internally valid
+        _log(5, total_checks, "JSONL mirror validation")
+        try:
+            jsonl_path = os.path.expanduser("~/.claude-search-library/summaries/ai-summaries.jsonl")
+
+            if os.path.exists(jsonl_path):
+                valid_lines = 0
+                invalid_lines = 0
+                with open(jsonl_path, "r", encoding="utf-8") as f:
+                    for lineno, line in enumerate(f, start=1):
+                        if not line.strip():
+                            continue
+                        try:
+                            json.loads(line)
+                            valid_lines += 1
+                        except json.JSONDecodeError:
+                            invalid_lines += 1
+                            errors.append(f"Invalid JSON in JSONL mirror at line {lineno}")
+
+                stats["jsonl_lines"] = valid_lines
+                if invalid_lines:
+                    stats["jsonl_invalid_lines"] = invalid_lines
+            else:
+                stats["jsonl_lines"] = 0
+                warnings.append("JSONL mirror not found (not created yet — run export_summaries_to_jsonl())")
+
+            checks_passed += 1
+        except Exception as e:
+            errors.append(f"JSONL mirror check error: {e}")
+            checks_failed += 1
+
+        # Check 6: Sync metadata sanity
+        _log(6, total_checks, "Sync metadata validation")
+        try:
+            devices = self.conn.execute("SELECT * FROM sync_metadata").fetchall()
+            stats["devices_registered"] = len(devices)
+
+            for device in devices:
+                if device["device_name"] is None:
+                    warnings.append(f"Device {device['device_id']} has no device_name set")
+
+            checks_passed += 1
+        except Exception as e:
+            errors.append(f"Sync metadata check error: {e}")
+            checks_failed += 1
+
+        # Check 7: FTS5 index status
+        _log(7, total_checks, "FTS5 index validation")
+        try:
+            fts5_exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='fts5_summaries'"
+            ).fetchone()
+
+            stats["fts5_index_exists"] = fts5_exists is not None
+            if fts5_exists is None:
+                warnings.append("FTS5 index not yet created (run create_fts5_index() after processing)")
+
+            checks_passed += 1
+        except Exception as e:
+            errors.append(f"FTS5 index check error: {e}")
+            checks_failed += 1
+
+        return {
+            "healthy": len(errors) == 0,
+            "checks_passed": checks_passed,
+            "checks_failed": checks_failed,
+            "errors": errors,
+            "warnings": warnings,
+            "stats": stats,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     def get_session_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
         return row[0]
