@@ -1,6 +1,8 @@
+import json
+
 import pytest
 
-from src.storage import Storage
+from src.storage import Storage, compute_session_hash
 
 
 SAMPLE_SESSION = {
@@ -187,3 +189,125 @@ def test_context_manager_closes_connection():
     with storage:
         storage.insert_session(SAMPLE_SESSION)
     assert storage._conn is None
+
+
+# ---- compute_session_hash / store_session_with_hash ------------------
+
+def test_compute_session_hash_deterministic():
+    session = {"messages": [{"role": "user", "content": "hi"}], "title": "t", "source": "claude-ai"}
+    assert compute_session_hash(session) == compute_session_hash(dict(session))
+
+
+def test_compute_session_hash_ignores_id_and_other_metadata():
+    base = {"messages": [{"role": "user", "content": "hi"}], "title": "t", "source": "claude-ai"}
+    with_id_a = dict(base, id="session-a", device="desktop")
+    with_id_b = dict(base, id="session-b", device="laptop")
+    assert compute_session_hash(with_id_a) == compute_session_hash(with_id_b)
+
+
+def test_compute_session_hash_differs_on_content_change():
+    session_a = {"messages": [{"role": "user", "content": "hi"}], "title": "t", "source": "claude-ai"}
+    session_b = {"messages": [{"role": "user", "content": "different"}], "title": "t", "source": "claude-ai"}
+    assert compute_session_hash(session_a) != compute_session_hash(session_b)
+
+
+def test_store_session_with_hash_inserts_new_session(db):
+    session = dict(SAMPLE_SESSION, id="sess-hash-1")
+    del session["content_hash"]  # let store_session_with_hash compute it
+
+    result = db.store_session_with_hash(session)
+
+    assert result["status"] == "inserted"
+    assert result["id"] == "sess-hash-1"
+    stored = db.get_session("sess-hash-1")
+    assert stored["content_hash"] == result["hash"]
+
+
+def test_store_session_with_hash_skips_duplicate_content(db):
+    session_a = dict(SAMPLE_SESSION, id="sess-hash-a")
+    del session_a["content_hash"]
+    session_b = dict(SAMPLE_SESSION, id="sess-hash-b")  # same title/source/messages
+    del session_b["content_hash"]
+
+    first = db.store_session_with_hash(session_a)
+    second = db.store_session_with_hash(session_b)
+
+    assert first["status"] == "inserted"
+    assert second["status"] == "skipped_duplicate"
+    assert second["hash"] == first["hash"]
+    # Only the first session should actually exist in the table.
+    assert db.get_session("sess-hash-b") is None
+    assert db.get_session_count() == 1
+
+
+# ---- JSONL durability mirror ------------------------------------------
+
+def test_export_summaries_to_jsonl_writes_all_summaries(db, tmp_path):
+    db.insert_session(SAMPLE_SESSION)
+    db.store_summary("sess-1", SAMPLE_SUMMARY)
+    second_session = dict(SAMPLE_SESSION, id="sess-2", content_hash="def456")
+    db.insert_session(second_session)
+    db.store_summary("sess-2", dict(SAMPLE_SUMMARY, session_tldr="Second summary"))
+
+    output_file = str(tmp_path / "summaries" / "mirror.jsonl")
+    count = db.export_summaries_to_jsonl(output_file)
+
+    assert count == 2
+    lines = [json.loads(l) for l in open(output_file, encoding="utf-8") if l.strip()]
+    assert {l["session_id"] for l in lines} == {"sess-1", "sess-2"}
+
+
+def test_export_summaries_to_jsonl_creates_parent_dirs(db, tmp_path):
+    db.insert_session(SAMPLE_SESSION)
+    db.store_summary("sess-1", SAMPLE_SUMMARY)
+
+    output_file = str(tmp_path / "nested" / "dir" / "mirror.jsonl")
+    db.export_summaries_to_jsonl(output_file)
+
+    assert (tmp_path / "nested" / "dir" / "mirror.jsonl").exists()
+
+
+def test_restore_summaries_from_jsonl_missing_file_raises(db, tmp_path):
+    with pytest.raises(FileNotFoundError):
+        db.restore_summaries_from_jsonl(str(tmp_path / "does-not-exist.jsonl"))
+
+
+def test_restore_summaries_from_jsonl_round_trip(tmp_path):
+    output_file = str(tmp_path / "mirror.jsonl")
+
+    with Storage(":memory:") as source_db:
+        source_db.insert_session(SAMPLE_SESSION)
+        source_db.store_summary("sess-1", SAMPLE_SUMMARY)
+        exported = source_db.export_summaries_to_jsonl(output_file)
+    assert exported == 1
+
+    # Restoring into a fresh database (with the referenced session already
+    # present, since summaries has a foreign key to sessions) should
+    # reproduce the summary row.
+    with Storage(":memory:") as target_db:
+        target_db.insert_session(SAMPLE_SESSION)
+        restored_count = target_db.restore_summaries_from_jsonl(output_file)
+        summary = target_db.get_summary("sess-1")
+
+    assert restored_count == 1
+    assert summary["tldr"] == "Fixed the mod crash."
+    assert summary["learnings"] == ["Check stack traces"]
+
+
+def test_restore_summaries_from_jsonl_is_idempotent(tmp_path):
+    output_file = str(tmp_path / "mirror.jsonl")
+
+    with Storage(":memory:") as source_db:
+        source_db.insert_session(SAMPLE_SESSION)
+        source_db.store_summary("sess-1", SAMPLE_SUMMARY)
+        source_db.export_summaries_to_jsonl(output_file)
+
+    with Storage(":memory:") as target_db:
+        target_db.insert_session(SAMPLE_SESSION)
+        target_db.restore_summaries_from_jsonl(output_file)
+        first_count = target_db.conn.execute("SELECT COUNT(*) FROM summaries").fetchone()[0]
+        target_db.restore_summaries_from_jsonl(output_file)
+        second_count = target_db.conn.execute("SELECT COUNT(*) FROM summaries").fetchone()[0]
+
+    assert first_count == 1
+    assert second_count == 1

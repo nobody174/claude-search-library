@@ -8,8 +8,10 @@ degrades gracefully to plain SQLite when the extension can't be loaded).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -131,6 +133,25 @@ def _run_schema_upgrades(conn: sqlite3.Connection) -> None:
             (str(SCHEMA_VERSION),),
         )
         conn.commit()
+
+
+def compute_session_hash(session_dict: dict) -> str:
+    """Compute a SHA256 hash of session content, for deduplication.
+
+    The hash covers the actual conversation content (messages, title,
+    source) rather than just the session id, so two independently-collected
+    exports of the same conversation hash identically even if their IDs
+    differ.
+    """
+    content = json.dumps(
+        {
+            "messages": session_dict.get("messages", []),
+            "title": session_dict.get("title", ""),
+            "source": session_dict.get("source", ""),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def init_db(db_path: Optional[str] = None) -> sqlite3.Connection:
@@ -344,6 +365,96 @@ class Storage:
         ).fetchone()
         return row is not None
 
+    def store_session_with_hash(self, session_dict: dict) -> dict:
+        """Insert a session, computing its content hash and skipping the
+        insert entirely if a session with the same content already exists.
+        """
+        content_hash = compute_session_hash(session_dict)
+
+        if self.check_duplicate(content_hash):
+            return {"status": "skipped_duplicate", "hash": content_hash}
+
+        session_dict = dict(session_dict, content_hash=content_hash)
+        session_id = self.insert_session(session_dict)
+        return {"status": "inserted", "hash": content_hash, "id": session_id}
+
+    # ---- JSONL durability mirror ------------------------------------
+
+    def export_summaries_to_jsonl(self, output_file: Optional[str] = None) -> int:
+        """Mirror all summaries to a JSONL file for durability.
+
+        This is a plain backup, not the source of truth — SQLite remains
+        authoritative during normal operation. If the database is ever
+        corrupted, delete it, reinitialize, and call
+        `restore_summaries_from_jsonl()` to rebuild the summaries table
+        from this file.
+        """
+        if output_file is None:
+            output_file = os.path.expanduser(
+                "~/.claude-search-library/summaries/ai-summaries.jsonl"
+            )
+
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+        summaries = self.conn.execute("SELECT * FROM summaries").fetchall()
+
+        count = 0
+        with open(output_file, "w", encoding="utf-8") as f:
+            for summary in summaries:
+                f.write(json.dumps(dict(summary)) + "\n")
+                count += 1
+
+        return count
+
+    def restore_summaries_from_jsonl(self, input_file: Optional[str] = None) -> int:
+        """Restore the summaries table from a JSONL backup.
+
+        Uses INSERT OR REPLACE, so this is safe to re-run and will not
+        duplicate rows. Raises FileNotFoundError if no backup exists at
+        the given (or default) path.
+        """
+        if input_file is None:
+            input_file = os.path.expanduser(
+                "~/.claude-search-library/summaries/ai-summaries.jsonl"
+            )
+
+        if not os.path.exists(input_file):
+            raise FileNotFoundError(f"No JSONL backup found at {input_file}")
+
+        count = 0
+        with self._cursor() as cur:
+            with open(input_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    summary_dict = json.loads(line)
+                    cur.execute(
+                        """
+                        INSERT OR REPLACE INTO summaries
+                            (session_id, tldr, learnings, patterns, tags,
+                             mentioned_tools, mentioned_languages, mentioned_frameworks,
+                             estimated_effort_minutes, topic_categories, confidence_score)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            summary_dict.get("session_id"),
+                            summary_dict.get("tldr"),
+                            summary_dict.get("learnings"),
+                            summary_dict.get("patterns"),
+                            summary_dict.get("tags"),
+                            summary_dict.get("mentioned_tools"),
+                            summary_dict.get("mentioned_languages"),
+                            summary_dict.get("mentioned_frameworks"),
+                            summary_dict.get("estimated_effort_minutes"),
+                            summary_dict.get("topic_categories"),
+                            summary_dict.get("confidence_score"),
+                        ),
+                    )
+                    count += 1
+
+        return count
+
     def get_session_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
         return row[0]
@@ -413,10 +524,19 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Claude Search Library storage")
     parser.add_argument("--init", action="store_true", help="Initialize config, directories, SQLite, and ChromaDB")
+    parser.add_argument(
+        "--restore-from-jsonl",
+        action="store_true",
+        help="Rebuild the summaries table from the JSONL durability mirror",
+    )
     args = parser.parse_args()
 
     if args.init:
         _run_init()
+    elif args.restore_from_jsonl:
+        with Storage() as db:
+            count = db.restore_summaries_from_jsonl()
+        print(f"Restored {count} summaries from JSONL backup")
 
 
 if __name__ == "__main__":
