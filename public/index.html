@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Claude Search Library</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="../src/api.js"></script>
+  <style>
+    /* Touch-friendly minimum target size on top of Tailwind utility classes. */
+    button, input, select {
+      min-height: 44px;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback, useRef } = React;
+    const api = window.ClaudeSearchAPI;
+
+    const LOCAL_STORAGE_KEY = "claude-search-library:unlocked";
+
+    function useDebouncedValue(value, delayMs) {
+      const [debounced, setDebounced] = useState(value);
+      useEffect(() => {
+        const timer = setTimeout(() => setDebounced(value), delayMs);
+        return () => clearTimeout(timer);
+      }, [value, delayMs]);
+      return debounced;
+    }
+
+    function Header({ view, onNavigate, onLock }) {
+      return (
+        <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+          <h1 className="text-lg font-semibold">Claude Search Library</h1>
+          <nav className="flex gap-2">
+            <button
+              className={`px-3 py-2 rounded text-sm ${view === "search" ? "bg-gray-900 text-white" : "bg-gray-100"}`}
+              onClick={() => onNavigate("search")}
+            >
+              Search
+            </button>
+            <button
+              className={`px-3 py-2 rounded text-sm ${view === "devices" ? "bg-gray-900 text-white" : "bg-gray-100"}`}
+              onClick={() => onNavigate("devices")}
+            >
+              Devices
+            </button>
+            <button className="px-3 py-2 rounded text-sm bg-gray-100" onClick={onLock}>
+              Lock
+            </button>
+          </nav>
+        </header>
+      );
+    }
+
+    function SetupPage({ onUnlocked }) {
+      const [passphrase, setPassphrase] = useState("");
+      const [totpCode, setTotpCode] = useState("");
+      const [error, setError] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError(null);
+        setLoading(true);
+        try {
+          const result = await api.setup(passphrase, totpCode);
+          if (result.success) {
+            // Only a "device verified" flag is persisted locally - never the
+            // passphrase or any derived key. Re-entering the passphrase per
+            // session is the trade-off for not storing secrets in the browser.
+            window.localStorage.setItem(LOCAL_STORAGE_KEY, "true");
+            onUnlocked();
+          } else {
+            setError(result.error || "Setup failed");
+          }
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4">
+          <form onSubmit={handleSubmit} className="w-full max-w-sm bg-white rounded-lg shadow p-6 space-y-4">
+            <h2 className="text-xl font-semibold text-center">Unlock Device</h2>
+            <p className="text-sm text-gray-500 text-center">
+              Enter your master passphrase and Authenticator code. Nothing is sent to the server except a verification check.
+            </p>
+            <div>
+              <label className="block text-sm font-medium mb-1" htmlFor="passphrase">
+                Master passphrase
+              </label>
+              <input
+                id="passphrase"
+                type="password"
+                autoComplete="off"
+                className="w-full border border-gray-300 rounded px-3 py-2 search-box"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1" htmlFor="totp">
+                Authenticator code
+              </label>
+              <input
+                id="totp"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                className="w-full border border-gray-300 rounded px-3 py-2 tracking-widest text-center"
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                required
+              />
+            </div>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-gray-900 text-white rounded py-2 font-medium disabled:opacity-50"
+            >
+              {loading ? "Verifying…" : "Setup Device"}
+            </button>
+          </form>
+        </div>
+      );
+    }
+
+    function FilterPanel({ filters, onChange }) {
+      return (
+        <div className="filter-panel bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+            <select
+              className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+              value={filters.source || ""}
+              onChange={(e) => onChange({ ...filters, source: e.target.value || undefined })}
+            >
+              <option value="">Any</option>
+              <option value="claude-ai">Claude.ai</option>
+              <option value="vscode">VS Code</option>
+              <option value="cowork">Cowork</option>
+              <option value="local">Local</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Device</label>
+            <select
+              className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+              value={filters.device || ""}
+              onChange={(e) => onChange({ ...filters, device: e.target.value || undefined })}
+            >
+              <option value="">Any</option>
+              <option value="desktop">Desktop</option>
+              <option value="laptop">Laptop</option>
+              <option value="phone">Phone</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Tags (comma-separated)</label>
+            <input
+              type="text"
+              className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+              value={filters.tags || ""}
+              onChange={(e) => onChange({ ...filters, tags: e.target.value || undefined })}
+              placeholder="minecraft, debugging"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
+              <input
+                type="date"
+                className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+                value={filters.dateStart || ""}
+                onChange={(e) => onChange({ ...filters, dateStart: e.target.value || undefined })}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
+              <input
+                type="date"
+                className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+                value={filters.dateEnd || ""}
+                onChange={(e) => onChange({ ...filters, dateEnd: e.target.value || undefined })}
+              />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ResultCard({ result, onViewDetails }) {
+      return (
+        <div className="result-card bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="font-semibold text-base">{result.title || "(untitled session)"}</h3>
+            <span className="text-xs shrink-0 bg-gray-100 rounded px-2 py-1">
+              {(result.relevance_score * 100).toFixed(0)}%
+            </span>
+          </div>
+          {result.tldr && <p className="text-sm text-gray-600 mt-1">{result.tldr}</p>}
+          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs text-gray-500">
+            <span>{result.source}{result.device ? ` · ${result.device}` : ""}</span>
+            {result.created_at && <span>{new Date(result.created_at).toLocaleDateString()}</span>}
+          </div>
+          {result.top_pattern && (
+            <p className="text-xs text-gray-500 mt-2 italic">"{result.top_pattern}"</p>
+          )}
+          <button
+            className="mt-3 text-sm font-medium text-blue-600 hover:underline"
+            onClick={() => onViewDetails(result.session_id)}
+          >
+            View Details →
+          </button>
+        </div>
+      );
+    }
+
+    function SessionDetailModal({ sessionId, onClose }) {
+      const [detail, setDetail] = useState(null);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        let cancelled = false;
+        api
+          .getSession(sessionId)
+          .then((data) => !cancelled && setDetail(data))
+          .catch((err) => !cancelled && setError(err.message));
+        return () => {
+          cancelled = true;
+        };
+      }, [sessionId]);
+
+      return (
+        <div className="modal-overlay fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+          <div className="modal bg-white rounded-t-lg sm:rounded-lg w-full sm:max-w-lg max-h-[85vh] overflow-y-auto p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold">{detail?.title || "Session"}</h2>
+              <button className="text-gray-400 text-2xl leading-none" onClick={onClose} aria-label="Close">
+                &times;
+              </button>
+            </div>
+
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            {!detail && !error && <p className="text-sm text-gray-500">Loading…</p>}
+
+            {detail && (
+              <div className="space-y-4 text-sm">
+                {detail.summary?.tldr && (
+                  <p className="text-gray-700">{detail.summary.tldr}</p>
+                )}
+
+                <div className="flex flex-wrap gap-x-3 text-xs text-gray-500">
+                  <span>Source: {detail.source}</span>
+                  <span>Device: {detail.device}</span>
+                  <span>Created: {detail.created_at}</span>
+                </div>
+
+                {detail.summary?.learnings?.length > 0 && (
+                  <div>
+                    <h3 className="font-medium mb-1">Learnings</h3>
+                    <ul className="list-disc list-inside space-y-1">
+                      {detail.summary.learnings.map((l, i) => (
+                        <li key={i}>{l}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {detail.summary?.patterns?.length > 0 && (
+                  <div>
+                    <h3 className="font-medium mb-1">Patterns</h3>
+                    <ul className="list-disc list-inside space-y-1">
+                      {detail.summary.patterns.map((p, i) => (
+                        <li key={i}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {detail.summary?.tags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {detail.summary.tags.map((t, i) => (
+                      <span key={i} className="bg-gray-100 rounded-full px-2 py-1 text-xs">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {detail.link_to_raw && (
+                  <a
+                    href={detail.link_to_raw}
+                    className="inline-block text-blue-600 text-sm hover:underline"
+                  >
+                    View raw chat file
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function buildApiFilters(filters) {
+      const out = {};
+      if (filters.source) out.source = filters.source;
+      if (filters.device) out.device = filters.device;
+      if (filters.tags) out.tags = filters.tags.split(",").map((t) => t.trim()).filter(Boolean);
+      if (filters.dateStart || filters.dateEnd) {
+        out.date_range = { start: filters.dateStart, end: filters.dateEnd };
+      }
+      return out;
+    }
+
+    function SearchPage() {
+      const [query, setQuery] = useState("");
+      const [filters, setFilters] = useState({});
+      const [results, setResults] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const [selectedSessionId, setSelectedSessionId] = useState(null);
+      const debouncedQuery = useDebouncedValue(query, 300);
+
+      useEffect(() => {
+        if (!debouncedQuery.trim()) {
+          setResults([]);
+          return;
+        }
+        let cancelled = false;
+        setLoading(true);
+        setError(null);
+        api
+          .search(debouncedQuery, { top_k: 20, filters: buildApiFilters(filters) })
+          .then((data) => !cancelled && setResults(data))
+          .catch((err) => !cancelled && setError(err.message))
+          .finally(() => !cancelled && setLoading(false));
+        return () => {
+          cancelled = true;
+        };
+      }, [debouncedQuery, filters]);
+
+      return (
+        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+          <div className="search-container">
+            <input
+              type="search"
+              className="search-box w-full border border-gray-300 rounded-lg px-4 py-3 text-base"
+              placeholder="Search your chat history…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <details className="sm:hidden">
+            <summary className="text-sm font-medium text-gray-600 cursor-pointer">Filters</summary>
+            <div className="mt-2">
+              <FilterPanel filters={filters} onChange={setFilters} />
+            </div>
+          </details>
+
+          <div className="hidden sm:grid sm:grid-cols-[220px_1fr] gap-4 items-start">
+            <FilterPanel filters={filters} onChange={setFilters} />
+            <ResultsColumn />
+          </div>
+
+          <div className="sm:hidden">
+            <ResultsColumn />
+          </div>
+
+          {selectedSessionId && (
+            <SessionDetailModal sessionId={selectedSessionId} onClose={() => setSelectedSessionId(null)} />
+          )}
+        </div>
+      );
+
+      function ResultsColumn() {
+        if (loading) return <p className="text-sm text-gray-500">Searching…</p>;
+        if (error) return <p className="text-sm text-red-600">{error}</p>;
+        if (!query.trim()) return <p className="text-sm text-gray-400">Start typing to search.</p>;
+        if (results.length === 0) return <p className="text-sm text-gray-400">No results found.</p>;
+
+        return (
+          <div className="space-y-3">
+            {results.map((r) => (
+              <ResultCard key={r.session_id} result={r} onViewDetails={setSelectedSessionId} />
+            ))}
+          </div>
+        );
+      }
+    }
+
+    function DevicesPage() {
+      const [devices, setDevices] = useState([]);
+      const [stats, setStats] = useState(null);
+      const [syncing, setSyncing] = useState(false);
+      const [error, setError] = useState(null);
+
+      const load = useCallback(() => {
+        setError(null);
+        Promise.all([api.getDevices(), api.getStats()])
+          .then(([d, s]) => {
+            setDevices(d);
+            setStats(s);
+          })
+          .catch((err) => setError(err.message));
+      }, []);
+
+      useEffect(() => {
+        load();
+      }, [load]);
+
+      const handleManualSync = async () => {
+        setSyncing(true);
+        try {
+          // There is no dedicated sync endpoint on the REST API (sync runs
+          // as a daemon / CLI command per Task 7) - this button just
+          // refreshes the device/stats view to show the latest known state.
+          load();
+        } finally {
+          setSyncing(false);
+        }
+      };
+
+      return (
+        <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+          <div className="device-status bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Last sync</p>
+              <p className="font-medium">{stats?.last_sync || "Never"}</p>
+            </div>
+            <button
+              className="bg-gray-900 text-white rounded px-4 py-2 text-sm disabled:opacity-50"
+              onClick={handleManualSync}
+              disabled={syncing}
+            >
+              {syncing ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="space-y-2">
+            {devices.map((d) => (
+              <div key={d.device_id} className="bg-white rounded-lg border border-gray-200 p-4 flex justify-between">
+                <div>
+                  <p className="font-medium">{d.device_name || d.device_id}</p>
+                  <p className="text-xs text-gray-500">Last sync: {d.last_sync_at || "Never"}</p>
+                </div>
+                {d.pending_changes > 0 && (
+                  <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-1 self-start">
+                    {d.pending_changes} pending
+                  </span>
+                )}
+              </div>
+            ))}
+            {devices.length === 0 && !error && (
+              <p className="text-sm text-gray-400">No devices have synced yet.</p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [unlocked, setUnlocked] = useState(
+        () => window.localStorage.getItem(LOCAL_STORAGE_KEY) === "true"
+      );
+      const [view, setView] = useState("search");
+
+      const handleLock = () => {
+        window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+        setUnlocked(false);
+      };
+
+      if (!unlocked) {
+        return <SetupPage onUnlocked={() => setUnlocked(true)} />;
+      }
+
+      return (
+        <div className="min-h-screen">
+          <Header view={view} onNavigate={setView} onLock={handleLock} />
+          {view === "search" ? <SearchPage /> : <DevicesPage />}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

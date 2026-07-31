@@ -1,0 +1,266 @@
+"""Data collection module for Claude Search Library.
+
+Collects chat sessions from Claude.ai exports, the VS Code Claude extension,
+Cowork, and a local watch folder, normalizing all of them into a common
+schema (see SPEC.md -> Normalization Schema).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import platform
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_WATCH_INTERVAL_SECONDS = 300
+
+
+def _content_hash(*parts: str) -> str:
+    h = hashlib.sha256()
+    for part in parts:
+        h.update((part or "").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+def _approx_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def detect_device() -> str:
+    """Best-effort guess at what kind of device this is running on."""
+    system = platform.system().lower()
+    if system == "darwin" and "iphone" in platform.platform().lower():
+        return "phone"
+    return "desktop"
+
+
+def normalize_session(
+    raw: dict,
+    source: str,
+    device: str,
+    raw_path: str = "",
+) -> dict:
+    """Convert a loosely-structured chat export into the normalized schema."""
+    messages_in = raw.get("messages") or []
+    messages = []
+    for m in messages_in:
+        content = m.get("content", "") or ""
+        messages.append(
+            {
+                "role": m.get("role", "user"),
+                "content": content,
+                "timestamp": m.get("timestamp") or raw.get("created_at") or "",
+                "tokens_approx": m.get("tokens_approx", _approx_tokens(content)),
+            }
+        )
+
+    created_at = raw.get("created_at") or (messages[0]["timestamp"] if messages else "")
+    updated_at = raw.get("updated_at") or (messages[-1]["timestamp"] if messages else created_at)
+
+    created_dt = _parse_iso(created_at)
+    updated_dt = _parse_iso(updated_at)
+    duration_seconds = 0
+    if created_dt and updated_dt and updated_dt >= created_dt:
+        duration_seconds = int((updated_dt - created_dt).total_seconds())
+
+    user_count = sum(1 for m in messages if m["role"] == "user")
+    assistant_count = sum(1 for m in messages if m["role"] == "assistant")
+
+    session_id = raw.get("id") or _content_hash(source, raw_path, created_at, str(len(messages)))
+
+    return {
+        "id": str(session_id),
+        "source": source,
+        "title": raw.get("title") or "Untitled Session",
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "duration_seconds": duration_seconds,
+        "message_count": len(messages),
+        "user_message_count": user_count,
+        "assistant_message_count": assistant_count,
+        "messages": messages,
+        "device": device,
+        "tags": raw.get("tags", []),
+        "raw_path": raw_path,
+    }
+
+
+def _load_json_files(folder: Path) -> list[tuple[dict, str]]:
+    results = []
+    if not folder.exists() or not folder.is_dir():
+        return results
+    for path in sorted(folder.glob("*.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Skipping unreadable export %s: %s", path, e)
+            continue
+        results.append((data, str(path)))
+    return results
+
+
+def collect_from_claude_ai(export_folder: str) -> list[dict]:
+    """Read JSON files from a Claude.ai exports folder and normalize them."""
+    folder = Path(export_folder)
+    sessions = []
+    for data, raw_path in _load_json_files(folder):
+        try:
+            sessions.append(normalize_session(data, "claude-ai", detect_device(), raw_path))
+        except Exception as e:
+            logger.warning("Failed to normalize %s: %s", raw_path, e)
+    return sessions
+
+
+def collect_from_vscode(extensions_path: Optional[str] = None) -> list[dict]:
+    """Find the Claude VS Code extension's chat history and normalize it."""
+    if extensions_path is None:
+        extensions_path = str(Path.home() / ".vscode" / "extensions")
+
+    ext_root = Path(extensions_path)
+    sessions = []
+    if not ext_root.exists():
+        logger.info("VS Code extensions path not found: %s", ext_root)
+        return sessions
+
+    for ext_dir in ext_root.glob("anthropic.claude-vscode-*"):
+        history_dir = ext_dir / "chat_history"
+        for data, raw_path in _load_json_files(history_dir):
+            try:
+                sessions.append(normalize_session(data, "vscode", detect_device(), raw_path))
+            except Exception as e:
+                logger.warning("Failed to normalize %s: %s", raw_path, e)
+    return sessions
+
+
+def collect_from_cowork(cowork_path: Optional[str] = None) -> list[dict]:
+    """Collect sessions from a local Cowork cache folder.
+
+    Cowork has no public sync API at time of writing, so this reads from a
+    local cache directory matching the normalized schema (Option B in SPEC.md).
+    """
+    if cowork_path is None:
+        cowork_path = str(Path.home() / ".claude-search-library" / "cache" / "cowork")
+
+    folder = Path(cowork_path)
+    sessions = []
+    for data, raw_path in _load_json_files(folder):
+        try:
+            sessions.append(normalize_session(data, "cowork", detect_device(), raw_path))
+        except Exception as e:
+            logger.warning("Failed to normalize %s: %s", raw_path, e)
+    return sessions
+
+
+def collect_from_local(folder_path: str) -> list[dict]:
+    """Import any JSON files sitting in a local watch folder."""
+    folder = Path(folder_path)
+    sessions = []
+    for data, raw_path in _load_json_files(folder):
+        try:
+            sessions.append(normalize_session(data, "local", detect_device(), raw_path))
+        except Exception as e:
+            logger.warning("Failed to normalize %s: %s", raw_path, e)
+    return sessions
+
+
+def collect_all(
+    claude_ai_folder: Optional[str] = None,
+    vscode_extensions_path: Optional[str] = None,
+    cowork_path: Optional[str] = None,
+    local_folder: Optional[str] = None,
+) -> dict:
+    """Run all collectors and return a summary of results.
+
+    Errors in one collector do not prevent the others from running.
+    """
+    base = Path.home() / ".claude-search-library" / "data" / "raw_exports"
+    claude_ai_folder = claude_ai_folder or str(base / "claude-ai")
+    local_folder = local_folder or str(base / "local")
+
+    collectors = {
+        "claude-ai": (collect_from_claude_ai, claude_ai_folder),
+        "vscode": (collect_from_vscode, vscode_extensions_path),
+        "cowork": (collect_from_cowork, cowork_path),
+        "local": (collect_from_local, local_folder),
+    }
+
+    all_sessions: list[dict] = []
+    errors = 0
+
+    for name, (func, arg) in collectors.items():
+        try:
+            sessions = func(arg)
+            all_sessions.extend(sessions)
+        except Exception as e:
+            logger.error("Collector '%s' failed: %s", name, e)
+            errors += 1
+
+    seen_ids = set()
+    new_sessions = []
+    for s in all_sessions:
+        if s["id"] not in seen_ids:
+            seen_ids.add(s["id"])
+            new_sessions.append(s)
+
+    return {
+        "new": len(new_sessions),
+        "errors": errors,
+        "total": len(all_sessions),
+    }
+
+
+def watch(interval: int = DEFAULT_WATCH_INTERVAL_SECONDS, iterations: Optional[int] = None) -> None:
+    """Run collect_all() on a fixed interval, forever (or `iterations` times)."""
+    count = 0
+    while iterations is None or count < iterations:
+        result = collect_all()
+        logger.info(
+            "Collection run: %d new, %d errors, %d total",
+            result["new"], result["errors"], result["total"],
+        )
+        count += 1
+        if iterations is None or count < iterations:
+            time.sleep(interval)
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Claude Search Library collector")
+    parser.add_argument("--watch", action="store_true", help="Run collection on a recurring interval")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=DEFAULT_WATCH_INTERVAL_SECONDS,
+        help="Seconds between collection runs when --watch is set (default: 300)",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.watch:
+        watch(interval=args.interval)
+    else:
+        result = collect_all()
+        print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

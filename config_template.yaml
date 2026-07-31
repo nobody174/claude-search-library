@@ -1,0 +1,32 @@
+api:
+  anthropic_api_key: ${ANTHROPIC_API_KEY}
+
+storage:
+  data_dir: ~/.claude-search-library
+  db_path: ~/.claude-search-library/library.db
+  chromadb_path: ~/.claude-search-library/chromadb
+  raw_chats_dir: ~/.claude-search-library/raw_chats
+
+sync:
+  github_repo: github.com/nobody174/claude-search-library
+  sync_interval: 300  # seconds
+  github_token: ${GITHUB_TOKEN}
+
+processing:
+  batch_size: 10
+  max_workers: 1
+  rate_limit_per_min: 10
+  timeout_per_chat: 30
+
+redaction:
+  flag_for_review_threshold: 3
+  enable_logging: true
+
+server:
+  port: 7654
+  host: localhost
+  allowed_origins: ["localhost", "127.0.0.1"]
+
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
