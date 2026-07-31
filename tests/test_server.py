@@ -109,6 +109,40 @@ def test_stats_endpoint(client):
     assert "last_sync" in data
 
 
+def test_health_endpoint_healthy_returns_200(client):
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["healthy"] is True
+    assert "stats" in data
+
+
+def test_health_endpoint_unhealthy_returns_503(client, monkeypatch):
+    monkeypatch.setattr(
+        "src.storage.Storage.verify_archive",
+        lambda self, verbose=False: {
+            "healthy": False, "checks_passed": 6, "checks_failed": 1,
+            "errors": ["Database integrity check failed: corrupted"], "warnings": [],
+            "stats": {}, "timestamp": "2026-01-01T00:00:00Z",
+        },
+    )
+
+    resp = client.get("/health")
+    assert resp.status_code == 503
+    assert resp.get_json()["healthy"] is False
+
+
+def test_health_endpoint_exception_returns_500(client, monkeypatch):
+    def boom(self, verbose=False):
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr("src.storage.Storage.verify_archive", boom)
+
+    resp = client.get("/health")
+    assert resp.status_code == 500
+    assert resp.get_json()["healthy"] is False
+
+
 def test_devices_endpoint(client):
     with Storage() as db:
         db.conn.execute(

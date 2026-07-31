@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -311,3 +312,171 @@ def test_restore_summaries_from_jsonl_is_idempotent(tmp_path):
 
     assert first_count == 1
     assert second_count == 1
+
+
+# ---- verify_archive -----------------------------------------------------
+
+def _session_with_raw_file(session_id, raw_path, content_hash=None, session_content=None):
+    content = session_content or {"id": session_id, "title": "t", "source": "claude-ai", "messages": []}
+    Path(raw_path).write_text(json.dumps(content), encoding="utf-8")
+    return dict(
+        SAMPLE_SESSION,
+        id=session_id,
+        raw_file_path=str(raw_path),
+        content_hash=content_hash or compute_session_hash(content),
+    )
+
+
+def test_verify_archive_empty_db_is_healthy(db):
+    result = db.verify_archive(verbose=False)
+
+    assert result["healthy"] is True
+    assert result["checks_failed"] == 0
+    assert result["checks_passed"] == 7
+    assert result["errors"] == []
+    assert "stats" in result
+    assert "timestamp" in result
+
+
+def test_verify_archive_returns_expected_stats_keys(db):
+    result = db.verify_archive()
+
+    stats = result["stats"]
+    assert "total_sessions" in stats
+    assert "total_summaries" in stats
+    assert "total_search_index_rows" in stats
+    assert stats["total_sessions"] >= 0
+
+
+def test_verify_archive_warns_on_missing_jsonl_but_still_passes(db):
+    result = db.verify_archive()
+
+    # JSONL won't exist until export_summaries_to_jsonl() is called - this
+    # should be a warning, not an error, and the check should still pass.
+    assert any("JSONL mirror not found" in w for w in result["warnings"])
+    assert result["healthy"] is True
+    assert result["checks_passed"] > 0
+
+
+def test_verify_archive_warns_on_missing_fts5_index(db):
+    result = db.verify_archive()
+    assert any("FTS5 index not yet created" in w for w in result["warnings"])
+    assert result["stats"]["fts5_index_exists"] is False
+
+
+def test_verify_archive_no_warning_once_fts5_index_exists(db):
+    db.create_fts5_index()
+    result = db.verify_archive()
+    assert result["stats"]["fts5_index_exists"] is True
+    assert not any("FTS5 index not yet created" in w for w in result["warnings"])
+
+
+def test_verify_archive_detects_session_summary_count_mismatch(db):
+    db.insert_session(SAMPLE_SESSION)
+    # No matching summary inserted - counts should now differ.
+    result = db.verify_archive()
+    assert any("Session/summary mismatch" in w for w in result["warnings"])
+    assert result["healthy"] is True  # mismatch is a warning, not an error
+
+
+def test_verify_archive_detects_real_content_hash_mismatch(db, tmp_path):
+    raw_path = tmp_path / "sess-hash.json"
+    session = _session_with_raw_file("sess-hash", raw_path)
+    session["content_hash"] = "deliberately-wrong-hash"
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["healthy"] is False
+    assert any("content hash mismatch" in e for e in result["errors"])
+    assert result["stats"]["hash_samples_checked"] == 1
+    assert result["stats"]["hash_samples_valid"] == 0
+
+
+def test_verify_archive_passes_when_hash_matches_raw_file(db, tmp_path):
+    raw_path = tmp_path / "sess-ok.json"
+    session = _session_with_raw_file("sess-ok", raw_path)
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["healthy"] is True
+    assert result["stats"]["hash_samples_checked"] == 1
+    assert result["stats"]["hash_samples_valid"] == 1
+
+
+def test_verify_archive_warns_when_raw_file_missing_for_hash_check(db):
+    session = dict(SAMPLE_SESSION, id="sess-no-raw", raw_file_path="/does/not/exist.json")
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert any("no readable raw file" in w for w in result["warnings"])
+    assert result["stats"]["hash_samples_checked"] == 0
+
+
+def test_verify_archive_flags_missing_raw_chat_file(db):
+    session = dict(SAMPLE_SESSION, id="sess-missing-file", raw_file_path="/does/not/exist.json")
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["stats"]["raw_chat_files_missing"] == 1
+    assert any("no longer exists" in w for w in result["warnings"])
+
+
+def test_verify_archive_reads_valid_jsonl_mirror(db, tmp_path):
+    db.insert_session(SAMPLE_SESSION)
+    db.store_summary("sess-1", SAMPLE_SUMMARY)
+    jsonl_path = tmp_path / "mirror.jsonl"
+    db.export_summaries_to_jsonl(str(jsonl_path))
+
+    import src.storage as storage_module
+    original = storage_module.os.path.expanduser
+    storage_module.os.path.expanduser = lambda p: str(jsonl_path) if "ai-summaries.jsonl" in p else original(p)
+    try:
+        result = db.verify_archive()
+    finally:
+        storage_module.os.path.expanduser = original
+
+    assert result["stats"]["jsonl_lines"] == 1
+    assert not any("JSONL mirror not found" in w for w in result["warnings"])
+
+
+def test_verify_archive_flags_invalid_jsonl_line(db, tmp_path):
+    jsonl_path = tmp_path / "mirror.jsonl"
+    jsonl_path.write_text('{"session_id": "s1"}\nnot valid json\n', encoding="utf-8")
+
+    import src.storage as storage_module
+    original = storage_module.os.path.expanduser
+    storage_module.os.path.expanduser = lambda p: str(jsonl_path) if "ai-summaries.jsonl" in p else original(p)
+    try:
+        result = db.verify_archive()
+    finally:
+        storage_module.os.path.expanduser = original
+
+    assert result["healthy"] is False
+    assert any("Invalid JSON in JSONL mirror" in e for e in result["errors"])
+
+
+def test_verify_archive_warns_on_device_with_no_name(db):
+    db.conn.execute(
+        "INSERT INTO sync_metadata (device_id, device_name, pending_changes) VALUES (?, NULL, 0)",
+        ("unnamed-device",),
+    )
+    db.conn.commit()
+
+    result = db.verify_archive()
+
+    assert result["stats"]["devices_registered"] == 1
+    assert any("has no device_name set" in w for w in result["warnings"])
+
+
+def test_verify_archive_detects_database_corruption(tmp_path):
+    db_path = tmp_path / "corrupt.db"
+    # Write garbage bytes so this isn't a valid SQLite file at all.
+    db_path.write_bytes(b"this is not a sqlite database" * 100)
+
+    with pytest.raises(Exception):
+        with Storage(str(db_path)) as db:
+            db.verify_archive()

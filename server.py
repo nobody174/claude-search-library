@@ -109,6 +109,17 @@ def devices_endpoint():
     return jsonify({"devices": [dict(r) for r in rows]})
 
 
+@app.route("/health", methods=["GET"])
+def health_endpoint():
+    """GET /health — archive health status. Check this before syncing."""
+    try:
+        with Storage() as db:
+            result = db.verify_archive(verbose=False)
+        return jsonify(result), 200 if result["healthy"] else 503
+    except Exception as e:
+        return jsonify({"error": str(e), "healthy": False}), 500
+
+
 @app.route("/review/<session_id>/approve", methods=["POST"])
 def approve_review_endpoint(session_id: str):
     body = request.get_json(silent=True) or {}

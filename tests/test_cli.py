@@ -164,6 +164,77 @@ def test_process_command_runs_batch(runner, monkeypatch):
     assert captured["batch_size"] == 3
 
 
+def test_verify_command_healthy_exits_zero(runner, monkeypatch):
+    class FakeStorage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def verify_archive(self, verbose=False):
+            return {
+                "healthy": True, "checks_passed": 7, "checks_failed": 0,
+                "errors": [], "warnings": [], "stats": {"total_sessions": 0},
+                "timestamp": "2026-01-01T00:00:00Z",
+            }
+
+    monkeypatch.setattr("src.storage.Storage", lambda *a, **kw: FakeStorage())
+
+    result = runner.invoke(cli.cli, ["verify"])
+
+    assert result.exit_code == 0
+    assert "Status: HEALTHY" in result.output
+    assert "Checks passed: 7" in result.output
+
+
+def test_verify_command_unhealthy_exits_nonzero(runner, monkeypatch):
+    class FakeStorage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def verify_archive(self, verbose=False):
+            return {
+                "healthy": False, "checks_passed": 6, "checks_failed": 1,
+                "errors": ["Database integrity check failed: corrupted"], "warnings": [],
+                "stats": {}, "timestamp": "2026-01-01T00:00:00Z",
+            }
+
+    monkeypatch.setattr("src.storage.Storage", lambda *a, **kw: FakeStorage())
+
+    result = runner.invoke(cli.cli, ["verify"])
+
+    assert result.exit_code != 0
+    assert "Status: PROBLEMS DETECTED" in result.output
+    assert "Database integrity check failed" in result.output
+
+
+def test_verify_command_json_output(runner, monkeypatch):
+    class FakeStorage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def verify_archive(self, verbose=False):
+            return {
+                "healthy": True, "checks_passed": 7, "checks_failed": 0,
+                "errors": [], "warnings": [], "stats": {}, "timestamp": "2026-01-01T00:00:00Z",
+            }
+
+    monkeypatch.setattr("src.storage.Storage", lambda *a, **kw: FakeStorage())
+
+    result = runner.invoke(cli.cli, ["verify", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["healthy"] is True
+
+
 def test_sync_command_default_bidirectional(runner, monkeypatch):
     monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
 

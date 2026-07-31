@@ -129,6 +129,50 @@ def search_cmd(query: str, mode: str, top_k: int, filters: str) -> None:
 
 
 @cli.command()
+@click.option("--verbose", is_flag=True, help="Print progress for each check")
+@click.option("--json", "output_json", is_flag=True, help="Output the full report as JSON")
+def verify(verbose: bool, output_json: bool) -> None:
+    """Verify archive integrity and consistency (run before syncing)."""
+    from src.storage import Storage
+
+    if verbose:
+        click.echo("Starting archive health check...\n")
+
+    with Storage() as db:
+        result = db.verify_archive(verbose=verbose)
+
+    if output_json:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo("\n" + "=" * 60)
+        click.echo("ARCHIVE INTEGRITY REPORT")
+        click.echo("=" * 60)
+
+        click.echo("Status: HEALTHY\n" if result["healthy"] else "Status: PROBLEMS DETECTED\n")
+        click.echo(f"Checks passed: {result['checks_passed']}")
+        click.echo(f"Checks failed: {result['checks_failed']}")
+
+        click.echo("\nStatistics:")
+        for key, value in result["stats"].items():
+            click.echo(f"  {key}: {value}")
+
+        if result["errors"]:
+            click.echo("\nERRORS:")
+            for error in result["errors"]:
+                click.echo(f"  - {error}")
+
+        if result["warnings"]:
+            click.echo("\nWARNINGS:")
+            for warning in result["warnings"]:
+                click.echo(f"  - {warning}")
+
+        click.echo("\n" + "=" * 60 + "\n")
+
+    if not result["healthy"]:
+        raise SystemExit(1)
+
+
+@cli.command()
 @click.option("--pull", is_flag=True, help="Pull only")
 @click.option("--push", is_flag=True, help="Push only")
 @click.option("--watch", is_flag=True, help="Run continuously as a daemon")
