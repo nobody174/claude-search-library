@@ -214,6 +214,7 @@
           <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs text-gray-500">
             <span>{result.source}{result.device ? ` · ${result.device}` : ""}</span>
             {result.created_at && <span>{new Date(result.created_at).toLocaleDateString()}</span>}
+            {result.search_type && <span className="italic">via {result.search_type}</span>}
           </div>
           {result.top_pattern && (
             <p className="text-xs text-gray-500 mt-2 italic">"{result.top_pattern}"</p>
@@ -328,6 +329,7 @@
 
     function SearchPage() {
       const [query, setQuery] = useState("");
+      const [mode, setMode] = useState("hybrid");
       const [filters, setFilters] = useState({});
       const [results, setResults] = useState([]);
       const [loading, setLoading] = useState(false);
@@ -344,26 +346,37 @@
         setLoading(true);
         setError(null);
         api
-          .search(debouncedQuery, { top_k: 20, filters: buildApiFilters(filters) })
+          .search(debouncedQuery, { top_k: 20, mode, filters: buildApiFilters(filters) })
           .then((data) => !cancelled && setResults(data))
           .catch((err) => !cancelled && setError(err.message))
           .finally(() => !cancelled && setLoading(false));
         return () => {
           cancelled = true;
         };
-      }, [debouncedQuery, filters]);
+      }, [debouncedQuery, mode, filters]);
 
       return (
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-          <div className="search-container">
+          <div className="search-container flex gap-2">
             <input
               type="search"
-              className="search-box w-full border border-gray-300 rounded-lg px-4 py-3 text-base"
+              className="search-box flex-1 border border-gray-300 rounded-lg px-4 py-3 text-base"
               placeholder="Search your chat history…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               autoFocus
             />
+            <select
+              id="search-mode"
+              className="border border-gray-300 rounded-lg px-2 text-sm shrink-0"
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              aria-label="Search mode"
+            >
+              <option value="hybrid">Hybrid (Recommended)</option>
+              <option value="semantic">Semantic (Smart)</option>
+              <option value="keyword">Keyword (Fast)</option>
+            </select>
           </div>
 
           <details className="sm:hidden">

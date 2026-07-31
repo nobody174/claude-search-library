@@ -48,6 +48,37 @@ def test_search_endpoint_returns_results(client, monkeypatch):
     assert "query_time_ms" in data
 
 
+def test_search_endpoint_defaults_to_hybrid_mode(client, monkeypatch):
+    captured = {}
+
+    def fake_search(query, mode="semantic", top_k=10):
+        captured["mode"] = mode
+        return []
+
+    monkeypatch.setattr("server.run_search", fake_search)
+
+    resp = client.get("/search?q=minecraft")
+    assert resp.status_code == 200
+    assert captured["mode"] == "hybrid"
+    assert resp.get_json()["mode"] == "hybrid"
+
+
+def test_search_endpoint_accepts_explicit_mode(client, monkeypatch):
+    captured = {}
+
+    def fake_search(query, mode="semantic", top_k=10):
+        captured["mode"] = mode
+        return []
+
+    monkeypatch.setattr("server.run_search", fake_search)
+
+    resp = client.get("/search?q=minecraft&mode=keyword")
+    assert resp.status_code == 200
+    assert captured["mode"] == "keyword"
+    assert resp.get_json()["mode"] == "keyword"
+    assert resp.get_json()["query"] == "minecraft"
+
+
 def test_session_endpoint_found(client):
     with Storage() as db:
         db.insert_session(_session("s1", raw_file_path="/raw/s1.json"))

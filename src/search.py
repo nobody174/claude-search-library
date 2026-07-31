@@ -1,11 +1,13 @@
 """Search interface module for Claude Search Library.
 
-Provides semantic search (ChromaDB) and keyword search (SQLite LIKE),
-merging results with full session/summary data and applying filters.
+Provides semantic search (ChromaDB), keyword search (FTS5 with a LIKE
+fallback), and a hybrid mode that combines both, merging results with full
+session/summary data and applying filters.
 """
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,6 +102,7 @@ def semantic_search(query: str, top_k: int = 10, filters: Optional[dict] = None,
             result, session, summary = built
             if not _matches_filters(session, summary, filters or {}):
                 continue
+            result["search_type"] = "semantic"
             results.append(result)
             if len(results) >= top_k:
                 break
@@ -108,7 +111,41 @@ def semantic_search(query: str, top_k: int = 10, filters: Optional[dict] = None,
 
 
 def keyword_search(query: str, top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None) -> list:
-    """Keyword search via SQL LIKE against the search_index table."""
+    """Keyword search via FTS5 (BM25-ranked), enriched with SQLite data.
+
+    Falls back to the slower LIKE-based search_index scan if the FTS5 index
+    hasn't been built yet (create_fts5_index() is run once per processing
+    batch — see storage.py — so a brand-new install may not have it).
+    """
+    with Storage(db_path) as db:
+        try:
+            fts_results = db.search_fts5(query, top_k=top_k * 3 if filters else top_k)
+        except sqlite3.OperationalError:
+            logger.info("FTS5 index not available, falling back to LIKE search")
+            return keyword_search_like(query, top_k=top_k, filters=filters, db_path=db_path)
+
+        results = []
+        for r in fts_results:
+            built = _build_result(r["session_id"], r["relevance_score"], db)
+            if built is None:
+                continue
+            result, session, summary = built
+            if not _matches_filters(session, summary, filters or {}):
+                continue
+            result["search_type"] = "keyword"
+            results.append(result)
+            if len(results) >= top_k:
+                break
+
+    return results
+
+
+def keyword_search_like(query: str, top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None) -> list:
+    """Keyword search via SQL LIKE against the search_index table.
+
+    This is the original (pre-FTS5) keyword search implementation, kept as
+    a fallback for databases that haven't built the FTS5 index yet.
+    """
     like_pattern = f"%{query}%"
 
     with Storage(db_path) as db:
@@ -166,13 +203,64 @@ def keyword_search(query: str, top_k: int = 10, filters: Optional[dict] = None, 
     return results
 
 
-def search(query: str, mode: str = "semantic", top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None, chroma_path: Optional[str] = None) -> list:
-    """Route to semantic or keyword search, applying filters and logging."""
+def hybrid_search(
+    query: str,
+    top_k: int = 10,
+    filters: Optional[dict] = None,
+    db_path: Optional[str] = None,
+    chroma_path: Optional[str] = None,
+    timeout_ms: float = 500,
+) -> list:
+    """Hybrid search: semantic first, with FTS5 keyword results filling gaps.
+
+    Semantic (ChromaDB) results are preferred — they're tier 1 and always
+    kept. Keyword (FTS5) results are only pulled in when semantic search
+    was slow (> timeout_ms) or returned fewer than top_k // 2 results, and
+    only for session_ids semantic search didn't already find. This keeps
+    the "smart" results primary while using FTS5 as a fast-and-cheap
+    completeness backstop, per the hybrid design in Task 8.
+    """
+    results_by_id: dict = {}
+
+    start = time.monotonic()
+    semantic_results = semantic_search(query, top_k=top_k, filters=filters, db_path=db_path, chroma_path=chroma_path)
+    semantic_time_ms = (time.monotonic() - start) * 1000
+
+    for r in semantic_results:
+        results_by_id[r["session_id"]] = {**r, "search_rank": 1, "semantic_time_ms": semantic_time_ms}
+
+    if semantic_time_ms > timeout_ms or len(semantic_results) < top_k // 2:
+        keyword_results = keyword_search(query, top_k=top_k, filters=filters, db_path=db_path)
+        for r in keyword_results:
+            session_id = r["session_id"]
+            if session_id not in results_by_id:
+                results_by_id[session_id] = {**r, "search_rank": 2}
+            else:
+                results_by_id[session_id]["found_by_keyword"] = True
+
+    sorted_results = sorted(
+        results_by_id.values(),
+        key=lambda x: (x["search_rank"], -x.get("relevance_score", 0)),
+    )
+    return sorted_results[:top_k]
+
+
+def search(
+    query: str,
+    mode: str = "semantic",
+    top_k: int = 10,
+    filters: Optional[dict] = None,
+    db_path: Optional[str] = None,
+    chroma_path: Optional[str] = None,
+) -> list:
+    """Route to semantic, keyword, or hybrid search, applying filters and logging."""
     _setup_file_logging()
     start = time.monotonic()
 
     if mode == "keyword":
         results = keyword_search(query, top_k=top_k, filters=filters, db_path=db_path)
+    elif mode == "hybrid":
+        results = hybrid_search(query, top_k=top_k, filters=filters, db_path=db_path, chroma_path=chroma_path)
     else:
         results = semantic_search(query, top_k=top_k, filters=filters, db_path=db_path, chroma_path=chroma_path)
 
@@ -182,3 +270,47 @@ def search(query: str, mode: str = "semantic", top_k: int = 10, filters: Optiona
         query, mode, top_k, filters, len(results), elapsed_ms,
     )
     return results
+
+
+class HybridSearch:
+    """Object-oriented wrapper over the module-level search functions.
+
+    Provided for callers that want to hold a Storage instance and reuse it
+    across multiple searches (e.g. a REPL or a long-lived server process),
+    matching the HybridSearch(storage) interface from the Task 8 spec. The
+    module-level `search()` / `semantic_search()` / `keyword_search()`
+    functions remain the primary API and open their own Storage per call.
+    """
+
+    def __init__(self, storage: Storage):
+        self.storage = storage
+
+    def semantic_search(self, query: str, top_k: int = 10, filters: Optional[dict] = None) -> list:
+        try:
+            return semantic_search(query, top_k=top_k, filters=filters, db_path=self.storage.db_path)
+        except Exception as e:
+            logger.warning("Semantic search failed: %s", e)
+            return []
+
+    def keyword_search(self, query: str, top_k: int = 10, filters: Optional[dict] = None) -> list:
+        try:
+            return keyword_search(query, top_k=top_k, filters=filters, db_path=self.storage.db_path)
+        except Exception as e:
+            logger.warning("Keyword search failed: %s", e)
+            return []
+
+    def hybrid_search(self, query: str, top_k: int = 10, filters: Optional[dict] = None, timeout_ms: float = 500) -> list:
+        return hybrid_search(
+            query, top_k=top_k, filters=filters, db_path=self.storage.db_path, timeout_ms=timeout_ms
+        )
+
+    def search(self, query: str, mode: str = "hybrid", top_k: int = 10, **filters) -> list:
+        """Main entry point. mode: "semantic" | "keyword" | "hybrid"."""
+        if mode == "semantic":
+            return self.semantic_search(query, top_k=top_k, filters=filters or None)
+        elif mode == "keyword":
+            return self.keyword_search(query, top_k=top_k, filters=filters or None)
+        elif mode == "hybrid":
+            return self.hybrid_search(query, top_k=top_k, filters=filters or None)
+        else:
+            raise ValueError(f"Unknown search mode: {mode}")

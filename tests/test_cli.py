@@ -71,6 +71,39 @@ def test_search_subcommand_no_results(runner, monkeypatch):
     assert "No results found." in result.output
 
 
+def test_search_subcommand_defaults_to_hybrid_mode(runner, monkeypatch):
+    calls = {}
+
+    def fake_search(query, mode="semantic", top_k=10, filters=None, **kwargs):
+        calls["mode"] = mode
+        return []
+
+    monkeypatch.setattr("src.search.search", fake_search)
+
+    result = runner.invoke(cli.cli, ["search", "async patterns"])
+
+    assert result.exit_code == 0
+    assert calls["mode"] == "hybrid"
+
+
+def test_search_subcommand_shows_search_type_when_present(runner, monkeypatch):
+    monkeypatch.setattr(
+        "src.search.search",
+        lambda *a, **kw: [
+            {
+                "session_id": "s1", "title": "t", "tldr": "tldr",
+                "source": "claude-ai", "device": "desktop", "created_at": "2026-07-31T14:00:00+00:00",
+                "relevance_score": 0.8, "search_type": "keyword",
+            }
+        ],
+    )
+
+    result = runner.invoke(cli.cli, ["search", "async", "--mode", "hybrid"])
+
+    assert result.exit_code == 0
+    assert "found via:  keyword" in result.output
+
+
 def test_collect_command_runs_collect_all(runner, monkeypatch):
     monkeypatch.setattr("src.collector.collect_all", lambda: {"new": 3, "errors": 0, "total": 3})
     result = runner.invoke(cli.cli, ["collect"])

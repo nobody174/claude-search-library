@@ -455,6 +455,77 @@ class Storage:
 
         return count
 
+    # ---- FTS5 full-text search ---------------------------------------
+
+    def create_fts5_index(self) -> None:
+        """Create (or rebuild) an FTS5 full-text index over summaries.
+
+        Indexes tldr + learnings + patterns as one combined searchable_text
+        column. Run once after the first processing batch, and again any
+        time you want a full rebuild (e.g. after a bulk re-summarize).
+
+        Note: this is a standalone FTS5 table populated by a one-time
+        `INSERT ... SELECT`, not an "external content" table
+        (`content=summaries, content_rowid=rowid`). External-content FTS5
+        tables require the content table to have a real INTEGER rowid the
+        FTS index can key against; `summaries.session_id` is a TEXT PRIMARY
+        KEY, so there is no such rowid to alias, and that configuration
+        fails at query time. The trade-off is that this index is a
+        snapshot — call create_fts5_index() again after summaries change to
+        keep it current, rather than getting automatic sync via triggers.
+        """
+        with self._cursor() as cursor:
+            cursor.execute("DROP TABLE IF EXISTS fts5_summaries")
+            cursor.execute(
+                """
+                CREATE VIRTUAL TABLE fts5_summaries USING fts5(
+                    session_id UNINDEXED,
+                    searchable_text
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO fts5_summaries (session_id, searchable_text)
+                SELECT
+                    session_id,
+                    tldr || ' ' || COALESCE(learnings, '') || ' ' || COALESCE(patterns, '')
+                FROM summaries
+                """
+            )
+
+    def search_fts5(self, query: str, top_k: int = 10) -> list:
+        """FTS5 keyword search with BM25 ranking.
+
+        Fast, exact/partial keyword matching. Returns a list of
+        {"session_id", "relevance_score", "search_type"} dicts, best match
+        first. Assumes create_fts5_index() has already been run; raises
+        sqlite3.OperationalError (propagated to the caller) if the index
+        doesn't exist yet.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT session_id, rank AS score
+            FROM fts5_summaries
+            WHERE fts5_summaries MATCH ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (query, top_k),
+        ).fetchall()
+
+        return [
+            {
+                "session_id": row["session_id"],
+                # FTS5's bm25-derived `rank` column is negative (more
+                # negative = more relevant); normalize to a positive score
+                # so it's comparable to ChromaDB's 0-1 relevance_score.
+                "relevance_score": abs(row["score"]),
+                "search_type": "keyword",
+            }
+            for row in rows
+        ]
+
     def get_session_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
         return row[0]

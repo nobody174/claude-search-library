@@ -47,9 +47,15 @@ def setup_endpoint():
 
 @app.route("/search", methods=["GET"])
 def search_endpoint():
+    """GET /search?q=QUERY&mode=hybrid&top_k=10
+
+    mode: "semantic" (ChromaDB, by meaning) | "keyword" (FTS5, fast) |
+    "hybrid" (both, default — semantic results preferred, FTS5 fills gaps
+    when semantic is slow or sparse; see src/search.py::hybrid_search).
+    """
     query = request.args.get("q", "")
     top_k = int(request.args.get("top_k", 10))
-    mode = request.args.get("mode", "semantic")
+    mode = request.args.get("mode", "hybrid")
 
     if not query:
         return jsonify({"error": "missing required query parameter 'q'"}), 400
@@ -60,6 +66,8 @@ def search_endpoint():
 
     return jsonify(
         {
+            "query": query,
+            "mode": mode,
             "results": results,
             "total_results": len(results),
             "query_time_ms": round(query_time_ms, 1),

@@ -21,6 +21,8 @@ def _print_results_table(results: list) -> None:
         click.echo(f"  created_at: {r.get('created_at')}")
         if r.get("top_pattern"):
             click.echo(f"  pattern:    {r['top_pattern']}")
+        if r.get("search_type"):
+            click.echo(f"  found via:  {r['search_type']}")
 
 
 class DefaultSearchGroup(click.Group):
@@ -108,7 +110,13 @@ def process(batch_size: int, watch: bool) -> None:
 
 @cli.command(name="search")
 @click.argument("query")
-@click.option("--mode", type=click.Choice(["semantic", "keyword"]), default="semantic", show_default=True)
+@click.option(
+    "--mode",
+    type=click.Choice(["semantic", "keyword", "hybrid"]),
+    default="hybrid",
+    show_default=True,
+    help="semantic (by meaning, ChromaDB) | keyword (fast, FTS5) | hybrid (both, recommended)",
+)
 @click.option("--top-k", default=10, show_default=True)
 @click.option("--filters", default=None, help='JSON filter object, e.g. \'{"source":"vscode"}\'')
 def search_cmd(query: str, mode: str, top_k: int, filters: str) -> None:
