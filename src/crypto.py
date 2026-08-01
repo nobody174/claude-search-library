@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import getpass
 import logging
+import os
 import secrets as secrets_module
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,14 @@ LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "crypto.log"
 SECRETS_FILENAME = "secrets.enc"
 TOTP_ISSUER = "Claude Search Library"
 TOTP_VALID_WINDOW = 1  # +/- 1 time step (30s each) tolerance for clock drift
+
+# Terminal prompts (getpass/input) only work in a genuine interactive TTY —
+# any automated caller (an agent driving the CLI, a scheduled task, a
+# non-interactive shell) has no way to supply these values otherwise. The
+# GUI popup (src/auth_ui.py) is the default on a machine with a display;
+# set CLAUDE_SEARCH_NO_GUI_AUTH=1 to force the terminal prompts instead
+# (e.g. over SSH with no X forwarding, or in CI).
+USE_GUI_AUTH = os.environ.get("CLAUDE_SEARCH_NO_GUI_AUTH", "").strip() != "1"
 
 ARGON2_TIME_COST = 3
 ARGON2_MEMORY_COST_KIB = 65536  # 64 MB
@@ -146,6 +155,60 @@ def _prompt_totp_code(prompt: str = "Enter code from Authenticator: ") -> str:
     return input(prompt)
 
 
+def _prompt_passphrase_and_totp_combined(gui_title: str) -> tuple:
+    """Prompt for passphrase + TOTP code together in one step.
+
+    The QR code itself is still shown as terminal ASCII art
+    (display_qr_code) regardless of this setting — rendering it as an
+    image in the popup would require adding Pillow as a dependency just
+    for this, and the terminal QR already works fine; only the blocking
+    getpass()/input() calls are the actual problem this replaces.
+
+    Returns (passphrase, totp_code). Falls back to two separate terminal
+    prompts when the GUI path is disabled or unavailable (no display,
+    Tkinter import failure, etc.) — the fallback is silent so headless/SSH
+    use isn't interrupted by a GUI that can't render.
+    """
+    if USE_GUI_AUTH:
+        try:
+            from src import auth_ui
+        except Exception as e:
+            logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
+        else:
+            try:
+                result = auth_ui.prompt_passphrase_and_totp(title=gui_title)
+                return result["passphrase"], result["totp_code"]
+            except auth_ui.AuthCancelled:
+                raise ValueError("Authentication was cancelled")
+
+    passphrase = _prompt_passphrase()
+    code = _prompt_totp_code()
+    return passphrase, code
+
+
+def _prompt_totp_only_gui_aware(gui_title: str = "Confirm Authenticator Code") -> str:
+    """Prompt for just a TOTP code, GUI-first with a terminal fallback.
+
+    Used by join_device_existing_setup(), where the passphrase must be
+    collected and used to decrypt the TOTP secret *before* the QR code (and
+    therefore this prompt) can even be shown — so it can't share a single
+    combined popup with the passphrase step the way setup_device_first_time
+    does.
+    """
+    if USE_GUI_AUTH:
+        try:
+            from src import auth_ui
+        except Exception as e:
+            logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
+        else:
+            try:
+                return auth_ui.prompt_totp_only(title=gui_title)
+            except auth_ui.AuthCancelled:
+                raise ValueError("Authentication was cancelled")
+
+    return _prompt_totp_code()
+
+
 def _push_secrets_to_github(encrypted_totp: str) -> None:
     """Push the encrypted TOTP blob to GitHub as secrets.enc.
 
@@ -177,9 +240,7 @@ def setup_device_first_time() -> dict:
     print("Scan this QR code into Google Authenticator:")
     display_qr_code(uri)
 
-    passphrase = _prompt_passphrase()
-
-    code = _prompt_totp_code()
+    passphrase, code = _prompt_passphrase_and_totp_combined("Set Up Claude Search Library")
     if not verify_totp_code(totp_secret, code):
         logger.warning("setup_device_first_time: TOTP verification failed")
         raise ValueError("Invalid TOTP code")
@@ -219,7 +280,7 @@ def join_device_existing_setup() -> dict:
     print("Scan this QR code into Google Authenticator:")
     display_qr_code(uri)
 
-    code = _prompt_totp_code()
+    code = _prompt_totp_only_gui_aware("Join Existing Device")
     if not verify_totp_code(totp_secret, code):
         logger.warning("join_device_existing_setup: TOTP verification failed")
         raise ValueError("Invalid TOTP code")

@@ -9,6 +9,11 @@ from src import crypto
 def redirect_log(tmp_path, monkeypatch):
     monkeypatch.setattr(crypto, "LOG_PATH", tmp_path / "crypto.log")
     crypto.logger.handlers.clear()
+    # Tests must never be able to spawn a real GUI popup - it would hang
+    # forever waiting for a human who isn't there. This is unconditional,
+    # not just a default: a real popup escaped into a pytest run once
+    # already (see the regression tests below) and looped indefinitely.
+    monkeypatch.setattr(crypto, "USE_GUI_AUTH", False)
     yield
 
 
