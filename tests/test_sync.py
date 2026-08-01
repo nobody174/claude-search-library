@@ -290,50 +290,83 @@ def test_sync_bidirectional_calls_pull_and_push(repo_path, mock_repo, tmp_path, 
     assert result["push"]["direction"] == "push"
 
 
-def test_sync_reindexes_when_pull_has_changes(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
+def test_sync_relays_reindexed_count_from_pull(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
+    """sync()'s reindexed count must come from whatever pull_from_github()
+    reports — reindexing happens inside pull_from_github() itself (so it
+    also fires for callers that call pull_from_github() directly, like
+    `cli.py sync --pull`), not duplicated in sync()'s own wrapper logic."""
     db_path = str(tmp_path / "test.db")
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
 
-    monkeypatch.setattr(worker, "pull_from_github", lambda: {"direction": "pull", "files_changed": 3, "conflicts": 0})
+    monkeypatch.setattr(
+        worker, "pull_from_github",
+        lambda: {"direction": "pull", "files_changed": 3, "conflicts": 0, "reindexed": 3},
+    )
     monkeypatch.setattr(worker, "push_to_github", lambda: {"direction": "push", "files_changed": 0, "conflicts": 0})
-
-    reindex_calls = []
-    monkeypatch.setattr("src.embedder.reindex_all", lambda **kw: reindex_calls.append(kw) or 3)
 
     result = worker.sync(direction="bidirectional")
     assert result["reindexed"] == 3
-    assert len(reindex_calls) == 1
 
 
-def test_sync_populates_search_index_and_fts5_after_pull(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
-    """Regression test: after a pull brings in new data, sync() must make
-    it findable by keyword/hybrid search too, not just semantic search.
-    reindex_all() (called for ChromaDB) never touches search_index or the
-    FTS5 table - previously a pulled session was semantically searchable
-    but invisible to keyword_search() until someone happened to run
-    create_fts5_index() by hand.
+def test_pull_from_github_reindexes_chromadb_and_fts5_when_files_change(
+    repo_path, mock_repo, tmp_path, encryption_key, monkeypatch
+):
+    """Regression test: reindexing (ChromaDB + search_index/FTS5) must
+    happen inside pull_from_github() itself. Previously it only lived in
+    sync()'s wrapper logic, so `cli.py sync --pull` (which calls
+    pull_from_github() directly) silently skipped it — a pulled session
+    landed in the database but was never embedded or indexed, so search
+    returned nothing on the receiving device even though the pull itself
+    reported success. Found via a real --join-device + --pull run on an
+    actual second machine.
     """
     db_path = str(tmp_path / "test.db")
-    with Storage(db_path) as db:
-        db.insert_session(_sample_session("sess-pulled"))
-        db.store_summary("sess-pulled", SAMPLE_SUMMARY)
+    sessions_dir = repo_path / sync.ENCRYPTED_SESSIONS_DIR
+    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
+    sessions_dir.mkdir(parents=True)
+    summaries_dir.mkdir(parents=True)
+
+    remote_session = dict(_sample_session("sess-remote"), status="processed")
+    session_blob = crypto.encrypt_data(json.dumps(remote_session).encode("utf-8"), encryption_key)
+    (sessions_dir / "sess-remote_session.enc").write_text(session_blob, encoding="utf-8")
+
+    remote_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
+    summary_blob = crypto.encrypt_data(json.dumps(remote_summary).encode("utf-8"), encryption_key)
+    (summaries_dir / "sess-remote_summary.enc").write_text(summary_blob, encoding="utf-8")
+
+    reindex_calls = []
+    monkeypatch.setattr("src.embedder.reindex_all", lambda **kw: reindex_calls.append(kw) or 1)
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
-    monkeypatch.setattr(worker, "pull_from_github", lambda: {"direction": "pull", "files_changed": 1, "conflicts": 0})
-    monkeypatch.setattr(worker, "push_to_github", lambda: {"direction": "push", "files_changed": 0, "conflicts": 0})
-    monkeypatch.setattr("src.embedder.reindex_all", lambda **kw: 1)
+    result = worker.pull_from_github()  # called directly, like cli.py sync --pull does
 
-    worker.sync(direction="bidirectional")
+    assert result["files_changed"] == 1
+    assert result["reindexed"] == 1
+    assert len(reindex_calls) == 1
 
     with Storage(db_path) as db:
         index_row = db.conn.execute(
-            "SELECT searchable_text FROM search_index WHERE session_id = ?", ("sess-pulled",)
+            "SELECT searchable_text FROM search_index WHERE session_id = ?", ("sess-remote",)
         ).fetchone()
         fts5_results = db.search_fts5("thing")  # SAMPLE_SUMMARY's tldr is "Did a thing."
 
     assert index_row is not None
-    assert "Did a thing" in index_row["searchable_text"]
-    assert any(r["session_id"] == "sess-pulled" for r in fts5_results)
+    assert any(r["session_id"] == "sess-remote" for r in fts5_results)
+
+
+def test_pull_from_github_skips_reindex_when_nothing_changed(
+    repo_path, mock_repo, tmp_path, encryption_key, monkeypatch
+):
+    db_path = str(tmp_path / "test.db")
+    reindex_calls = []
+    monkeypatch.setattr("src.embedder.reindex_all", lambda **kw: reindex_calls.append(kw) or 0)
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    result = worker.pull_from_github()
+
+    assert result["files_changed"] == 0
+    assert result["reindexed"] == 0
+    assert len(reindex_calls) == 0  # no point rebuilding indexes when nothing new arrived
 
 
 def test_sync_propagates_errors(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):

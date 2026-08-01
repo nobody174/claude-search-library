@@ -296,10 +296,37 @@ class SyncWorker:
                 files_changed += 1
 
         _update_device_metadata(self.repo_path, pending_changes=0)
+
+        reindexed = 0
+        if files_changed > 0:
+            # Reindexing lives here, inside pull_from_github() itself, not
+            # in sync()'s wrapper logic - it must fire regardless of which
+            # caller triggers a pull. It previously lived only in sync(),
+            # so `cli.py sync --pull` (which calls pull_from_github()
+            # directly, bypassing sync()) silently skipped it: a pulled
+            # session landed in the database but was never embedded into
+            # ChromaDB or indexed for keyword search, so search returned
+            # nothing on the receiving device even though pull reported
+            # success. Found via a real --join-device + --pull run on an
+            # actual second machine.
+            try:
+                from src.embedder import reindex_all
+                reindexed = reindex_all(db_path=self.db_path, chroma_path=self.chroma_path)
+            except Exception as e:
+                logger.warning("Failed to rebuild ChromaDB embeddings after pull: %s", e)
+            try:
+                self._reindex_search_index_and_fts5()
+            except Exception as e:
+                logger.warning("Failed to rebuild search_index/FTS5 after pull: %s", e)
+
         logger.info(
-            "pull complete: files_changed=%d conflicts=%d", files_changed, conflicts
+            "pull complete: files_changed=%d conflicts=%d reindexed=%d",
+            files_changed, conflicts, reindexed,
         )
-        return {"direction": "pull", "files_changed": files_changed, "conflicts": conflicts}
+        return {
+            "direction": "pull", "files_changed": files_changed,
+            "conflicts": conflicts, "reindexed": reindexed,
+        }
 
     def _reindex_search_index_and_fts5(self) -> None:
         """Rebuild search_index + FTS5 for all processed sessions.
@@ -332,9 +359,12 @@ class SyncWorker:
             db.create_fts5_index()
 
     def sync(self, direction: str = "bidirectional") -> dict:
-        """Orchestrate a full sync: pull, merge, push, rebuild ChromaDB.
+        """Orchestrate a full sync: pull (which reindexes on its own), then push.
 
-        `direction` is one of "pull", "push", or "bidirectional".
+        `direction` is one of "pull", "push", or "bidirectional". Reindexing
+        (ChromaDB + search_index/FTS5) happens inside pull_from_github()
+        itself so it also fires for direct pull_from_github() callers (e.g.
+        `cli.py sync --pull`), not just through this method.
         Errors from any stage are logged and re-raised after cleanup.
         """
         _setup_file_logging()
@@ -342,17 +372,10 @@ class SyncWorker:
         try:
             if direction in ("pull", "bidirectional"):
                 result["pull"] = self.pull_from_github()
+                result["reindexed"] = result["pull"].get("reindexed", 0)
 
             if direction in ("push", "bidirectional"):
                 result["push"] = self.push_to_github()
-
-            if result["pull"] and result["pull"]["files_changed"] > 0:
-                from src.embedder import reindex_all
-                result["reindexed"] = reindex_all(db_path=self.db_path, chroma_path=self.chroma_path)
-                try:
-                    self._reindex_search_index_and_fts5()
-                except Exception as e:
-                    logger.warning("Failed to rebuild search_index/FTS5 after pull: %s", e)
 
             logger.info("sync complete: direction=%s result=%s", direction, result)
             return result
