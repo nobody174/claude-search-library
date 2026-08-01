@@ -1,251 +1,267 @@
-# Claude Search Library — Build Package
+# Claude Search Library
 
-**Complete specification and build tasks for a distributed, offline-first personal knowledge management system.**
+**Distributed, offline-first personal knowledge management system**
 
-This package contains everything you need to build the Claude Search Library with Claude Code.
+Collect Claude chats from all your devices. Summarize with AI. Search semantically. Sync encrypted to GitHub. Works offline.
 
----
+![Status Badge](https://img.shields.io/badge/status-production-green)
+![Tests](https://img.shields.io/badge/tests-202%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-## What's Inside
+## What Is This?
 
-```
-claude-search-library-build/
-├── SPEC.md                           # Complete specification (80 pages)
-├── CLAUDE_CODE_BUILD_PLAN.md         # How to use this with Claude Code
-├── requirements.txt                  # Python dependencies
-├── .gitignore                        # Git ignore rules
-├── CLAUDE.md                         # Project documentation template
-├── tasks/                            # 10 individual build tasks
-│   ├── TASK_1_SETUP_AND_COLLECTION.md
-│   ├── TASK_2_PROCESSING_SUMMARIZATION.md
-│   ├── TASK_3_REDACTION_PRIVACY.md
-│   ├── TASK_4_STORAGE_SQLITE.md
-│   ├── TASK_5_EMBEDDINGS_CHROMADB.md
-│   ├── TASK_6_ENCRYPTION_2FA.md
-│   ├── TASK_7_DISTRIBUTED_SYNC.md
-│   ├── TASK_8_SEARCH_INTERFACE.md
-│   ├── TASK_9_CONFIG_INITIALIZATION.md
-│   └── TASK_10_WEB_UI.md
-└── README.md                         # This file
-```
+You use Claude across multiple machines (home desktop, laptop at cabin, phone, tablet). Your chats scatter across devices and disappear when a machine dies or gets wiped.
 
----
+**Claude Search Library solves this:**
+
+- 📦 **Collect** — Gather chats from Claude.ai, VS Code, Cowork, local folders
+- 🧠 **Summarize** — Claude API extracts learnings, patterns, reusable workflows
+- 🔍 **Search** — Semantic (finds by meaning) + keyword (FTS5, finds by exact words) hybrid search
+- 🌍 **Sync** — Multi-device sync via encrypted GitHub private repo
+- 🔒 **Encrypt** — Master passphrase + Google Authenticator 2FA
+- 📱 **Access** — Search from desktop, laptop, phone (React web UI)
+- 🔌 **Offline** — Works completely offline, syncs when internet returns
+- ✅ **Test** — 202 Python + 10 Node tests, production-ready
 
 ## Quick Start
 
-### 1. Extract
+### Requirements
+- Python 3.11+
+- Git
+- GitHub account (private repo for your own data)
+- Google Authenticator (phone)
+- LastPass or similar (for master passphrase backup)
+
+### Installation (Desktop)
 
 ```bash
-unzip claude-search-library-build.zip -d ~/projects/claude-search-library/
-cd ~/projects/claude-search-library/
+git clone https://github.com/nobody174/claude-search-library.git
+cd claude-search-library
+
+# Setup Python environment
+python3 -m venv venv
+source venv/bin/activate        # macOS/Linux
+# venv\Scripts\activate          # Windows (cmd/PowerShell)
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Initialize database + ChromaDB
+python3 -m src.storage --init
+
+# Setup 2FA encryption (one-time)
+python3 -m src.crypto --setup
+# Follow prompts: scan QR → enter passphrase → verify TOTP code
+
+# Collect existing chats
+python3 cli.py collect
+
+# Process summaries with Claude API
+python3 cli.py process --batch-size 10
+
+# Verify the archive is healthy before syncing
+python3 cli.py verify
+
+# Start sync daemon (runs every 5 min)
+python3 src/sync.py --daemon &
+
+# Start search API
+python3 server.py --port 7654 &
+
+# Test search
+python3 cli.py search "your query here"
 ```
 
-### 2. Read the Spec
+### Installation (Laptop, join existing setup)
 
-Open `SPEC.md` to understand the system architecture and features.
+```bash
+git clone https://github.com/nobody174/claude-search-library.git
+cd claude-search-library
 
-### 3. Follow the Build Plan
+python3 -m venv venv
+source venv/bin/activate
 
-Open `CLAUDE_CODE_BUILD_PLAN.md` and follow the step-by-step instructions.
+pip install -r requirements.txt
 
-### 4. Build Each Task
+# Join existing setup (sync encryption key)
+python3 -m src.crypto --join-device
+# Follow prompts: enter passphrase → scan TOTP QR → verify code
 
-For each task (1-10):
-1. Open `tasks/TASK_N_*.md`
-2. Copy the entire prompt
-3. Paste into Claude Code
-4. Save the generated files
-5. Move to next task
+# Pull all data from desktop
+python3 src/sync.py --pull
 
----
+# Start daemons
+python3 src/sync.py --daemon &
+python3 server.py --port 7654 &
+```
 
-## Files to Know
+### Access from iPhone
 
-| File | Purpose |
-|------|---------|
-| `SPEC.md` | 80-page complete specification (architecture, schema, encryption, deployment) |
-| `CLAUDE_CODE_BUILD_PLAN.md` | Step-by-step guide for building with Claude Code |
-| `CLAUDE.md` | Project documentation + known blockers + troubleshooting |
-| `requirements.txt` | Python dependencies (install with `pip install -r requirements.txt`) |
-| `.gitignore` | Don't commit .env, .claude-search-library/, __pycache__, etc. |
-| `tasks/*.md` | Individual task prompts (copy into Claude Code) |
+```
+1. Safari: https://your-laptop-ip:7654
+2. Enter master passphrase
+3. Enter Google Authenticator code
+4. Start searching!
+```
 
----
+## Search Modes
 
-## System Overview
+| Mode | How it works | When to use |
+|------|--------------|-------------|
+| `semantic` | ChromaDB cosine similarity — finds results by meaning | Fuzzy, conceptual queries |
+| `keyword` | SQLite FTS5 with BM25 ranking — finds exact/partial word matches | Fast, precise lookups |
+| `hybrid` (default) | Semantic first; falls back to keyword when semantic is slow or sparse | General use — best of both |
 
-**Claude Search Library** is a distributed personal knowledge management system that:
+```bash
+python3 cli.py search "async patterns"                    # hybrid (default)
+python3 cli.py search "async patterns" --mode semantic
+python3 cli.py search "async patterns" --mode keyword --top-k 20
+```
 
-✅ **Collects** chats from Claude.ai, VS Code, Cowork, local folders  
-✅ **Summarizes** each chat with Claude API (TL;DR, learnings, patterns)  
-✅ **Encrypts** everything with master passphrase + Google Authenticator 2FA  
-✅ **Syncs** to private GitHub repo (5-minute intervals)  
-✅ **Auto-merges** conflicts via cr-sqlite CRDT  
-✅ **Searches** semantically with local ChromaDB  
-✅ **Works offline** — syncs when internet available  
-✅ **Multi-device** — desktop, laptops, phones, tablets all stay in sync  
+## Common Commands
 
----
+```bash
+# Collect new chats from all sources
+python3 cli.py collect
+python3 cli.py collect --watch      # run continuously
+python3 cli.py collect --dry-run    # preview without importing
+
+# Summarize with Claude API
+python3 cli.py process --batch-size 10
+
+# Search
+python3 cli.py search "minecraft mod debugging"
+python3 cli.py search "python" --mode keyword --filters '{"source":"vscode"}'
+
+# Check archive integrity (run before syncing)
+python3 cli.py verify
+python3 cli.py verify --verbose
+python3 cli.py verify --json
+
+# Sync to/from GitHub
+python3 cli.py sync              # bidirectional
+python3 cli.py sync --pull
+python3 cli.py sync --push
+python3 cli.py sync --watch      # daemon mode
+
+# REST API
+python3 server.py --port 7654
+curl "http://localhost:7654/search?q=minecraft&mode=hybrid" | jq
+curl http://localhost:7654/stats | jq
+curl http://localhost:7654/health | jq
+```
+
+## Architecture
+
+```
+Each Device (Desktop | Laptop | Phone)
+    ↓
+Collect chats from multiple sources
+    ↓
+Process with Claude API (summarize)
+    ↓
+Redact secrets
+    ↓
+Store locally (SQLite + ChromaDB)
+    ↓
+Encrypt & sync to GitHub (every 5 min)
+    ↓
+Pull updates from other devices
+    ↓
+Auto-merge (Last-Write-Wins, cr-sqlite when available)
+    ↓
+Rebuild ChromaDB
+    ↓
+Search locally (semantic + keyword hybrid)
+```
 
 ## Why This Approach?
 
 | Decision | Benefit |
 |----------|---------|
-| **Distributed sync via GitHub** | No central server; desktop can go offline at cabin |
-| **cr-sqlite CRDT** | Automatic conflict resolution; no manual merging |
-| **Master passphrase + TOTP** | 148-bit entropy; brute-force resistant |
-| **Local ChromaDB** | Semantic search works offline; no API calls |
-| **Encrypt everything on GitHub** | GitHub can't read your data; zero-knowledge |
-| **Daily batch processing** | Respects Claude API rate limits |
-| **React web UI** | Works on iPhone Safari; easier than native app |
-
----
-
-## Build Timeline
-
-**Total time**: ~2-4 hours (depends on Claude Code speed and code review)
-
-- Task 1: 15 min (data collection)
-- Task 2: 20 min (processing + API)
-- Task 3: 15 min (redaction)
-- Task 4: 20 min (SQLite schema)
-- Task 5: 15 min (ChromaDB)
-- Task 6: 25 min (encryption + 2FA)
-- Task 7: 30 min (distributed sync)
-- Task 8: 40 min (search + CLI + API)
-- Task 9: 20 min (configuration)
-- Task 10: 40 min (web UI)
-
-**Then**: 30 min testing + setup
-
----
-
-## After Build: First Run
-
-### Desktop Setup
-
-```bash
-cd ~/projects/claude-search-library/
-
-# 1. Initialize database
-python3 -m src.storage --init
-
-# 2. Setup 2FA encryption
-python3 -m src.crypto --setup
-# Scan QR into Google Authenticator
-# Enter master passphrase
-# Verify TOTP code
-
-# 3. Collect existing chats
-python3 cli.py collect
-
-# 4. Process summaries
-python3 cli.py process --batch-size 10
-
-# 5. Start sync daemon (background)
-python3 src/sync.py --daemon &
-
-# 6. Start search API
-python3 server.py --port 7654 &
-
-# 7. Test search
-python3 cli.py search "minecraft"
-```
-
-### Laptop Setup (Later)
-
-```bash
-# Join existing setup
-python3 -m src.crypto --join-device
-# Enter master passphrase (from LastPass)
-# Scan TOTP QR (synced)
-# Verify TOTP code
-
-# Pull all Desktop data
-python3 src/sync.py --pull
-
-# Start daemon
-python3 src/sync.py --daemon &
-```
-
-### iPhone Setup (Later)
-
-```
-1. Safari: https://your-laptop-ip:7654
-2. Enter master passphrase + TOTP code
-3. Start searching!
-```
-
----
+| **Distributed sync via GitHub** | No central server; desktop can go offline at a cabin |
+| **Hybrid search (ChromaDB + FTS5)** | Semantic recall for fuzzy queries, fast BM25 keyword matching as backstop |
+| **Master passphrase + TOTP** | Two independent factors; brute-force resistant |
+| **Local ChromaDB** | Semantic search works offline; no API calls at query time |
+| **Encrypt everything on GitHub** | GitHub only ever sees encrypted blobs |
+| **Content-hash deduplication** | Re-collecting the same chat twice is a no-op |
+| **JSONL durability mirror** | Summaries survive SQLite corruption; rebuild from a flat backup |
+| **React web UI (CDN, no build step)** | Works on iPhone Safari; nothing to compile or deploy |
 
 ## Key Questions Answered
 
-**Q: Is this secure?**  
-A: Yes. Master passphrase + TOTP 2FA. GitHub only sees encrypted blobs. Encryption key never uploaded.
+**Q: Is this secure?**
+A: Master passphrase + TOTP 2FA, combined via Argon2id key derivation. GitHub only sees encrypted blobs. The encryption key is never uploaded or transmitted — see [Security](#security).
 
-**Q: Does it work offline?**  
-A: Yes. Everything works offline. Syncs when internet available (5-min intervals).
+**Q: Does it work offline?**
+A: Yes. Everything runs locally. Syncing to GitHub is the only thing that needs a connection, and it batches automatically when one is available.
 
-**Q: How much storage on GitHub?**  
-A: ~10 MB/year (negligible). Includes both summaries AND raw chats encrypted.
+**Q: How much storage does this use on GitHub?**
+A: Small — encrypted summaries and (optionally) encrypted raw chats. Actual size depends on your chat volume.
 
-**Q: Can I have unlimited devices?**  
-A: Yes. Desktop, laptops, phones, tablets — all sync via GitHub.
+**Q: Can I have unlimited devices?**
+A: Yes. Each device is autonomous; GitHub is just the transport layer.
 
-**Q: What if GitHub account is hacked?**  
-A: Attacker sees encrypted blobs. Can't decrypt without master passphrase + TOTP phone.
+**Q: What if my GitHub account is compromised?**
+A: An attacker sees only encrypted blobs. Decrypting requires both your master passphrase and your TOTP secret.
 
-**Q: What if I lose my phone with TOTP?**  
-A: Backup codes stored in LastPass. Can recover.
+**Q: What if I lose my phone with the Authenticator app?**
+A: Use one of the 10 generated backup codes (store them in your password manager, not in this repo).
 
-**Q: Can I build this myself without Claude Code?**  
-A: Yes, but it's 10k+ lines of code. Claude Code saves massive time.
+**Q: What if my local database gets corrupted?**
+A: Run `python3 cli.py verify` to detect it, then `python3 -m src.storage --restore-from-jsonl` to rebuild the summaries table from the JSONL durability mirror.
 
----
+## Security
 
-## Troubleshooting Build Issues
+- **Two-factor key derivation**: `derive_encryption_key(passphrase, totp_secret)` combines both factors via Argon2id before producing a Fernet key — see `src/crypto.py`.
+- **The master passphrase is never stored** anywhere, on any device or on GitHub.
+- **Redaction before indexing**: API keys, GitHub/Discord tokens, AWS keys, emails, and IP addresses are auto-redacted from summaries; sessions with more than 3 redactions are flagged for manual review instead of being indexed automatically.
+- **CORS is restricted** to `localhost`/`127.0.0.1` by default in `server.py` — do not expose the API port directly to the public internet without adding your own auth/reverse-proxy layer.
 
-**"Claude is asking confusing questions"**  
-→ Reference the relevant section in `SPEC.md` in your prompt
+If you find a security issue, please open a private security advisory on GitHub rather than a public issue.
 
-**"Generated code has syntax errors"**  
-→ Ask Claude to fix: "Fix the syntax error on line X" (paste error)
+## Project Structure
 
-**"I don't understand the imports"**  
-→ Check `SPEC.md` → "Tech Stack" section for library usage
+```
+claude-search-library/
+├── src/
+│   ├── collector.py     # Gather chats from Claude.ai, VS Code, Cowork, local
+│   ├── processor.py     # Summarize via Claude API
+│   ├── redactor.py      # Secret detection & redaction
+│   ├── storage.py       # SQLite schema, CRUD, dedup, JSONL mirror, verify_archive
+│   ├── embedder.py      # ChromaDB semantic embeddings
+│   ├── crypto.py        # Passphrase + TOTP key derivation, encrypt/decrypt
+│   ├── sync.py          # GitHub push/pull + merge
+│   ├── search.py        # Semantic / keyword (FTS5) / hybrid search
+│   ├── config.py        # config.yaml loading + env var overrides
+│   └── api.js           # Client-side API wrapper for the web UI
+├── public/
+│   └── index.html       # React SPA (search, filters, session detail, sync status)
+├── cli.py                # claude-search CLI (collect, process, search, verify, sync)
+├── server.py             # Flask REST API
+├── config_template.yaml  # Copy to config.yaml and fill in
+├── requirements.txt
+└── tests/                 # 202 Python tests (pytest) + 10 Node tests (api.js)
+```
 
-**"Module can't find imports from previous tasks"**  
-→ Normal. Previous tasks are already built. They're available to import.
+## Documentation
 
----
+- **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** — Step-by-step setup for desktop, additional devices, and the web UI
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Fixes for common setup, sync, and search issues
+- **[SPEC.md](SPEC.md)** — Full technical specification: schema, encryption model, sync protocol
+- **[CLAUDE.md](CLAUDE.md)** — Architecture decisions, known limitations, troubleshooting notes
+- **[tasks/](tasks/)** — The original build-task breakdown this project was implemented from
 
-## Next Steps After Build
+## Contributing
 
-1. ✅ Run `python3 -m src.storage --init` to create database
-2. ✅ Follow "First Run" section above for Desktop setup
-3. ✅ Add laptop (or phone) using "Join Device" flow
-4. ✅ Try searching your chats
-5. ✅ Set up cron jobs for automated collection + processing
-6. ✅ Push to your GitHub repo
-
----
-
-## Support
-
-- **Full Specification**: See `SPEC.md` (80 pages, covers everything)
-- **Project Docs**: See `CLAUDE.md` (troubleshooting, architecture, decisions)
-- **Build Help**: See `CLAUDE_CODE_BUILD_PLAN.md` (step-by-step guide)
-
----
+Issues and pull requests are welcome. This started as a personal tool, so expect some rough edges — see `CLAUDE.md` for known limitations (e.g. cr-sqlite CRDT support is best-effort and falls back to a simpler merge policy where the native extension isn't available).
 
 ## License
 
-MIT — You own the code. Use it, modify it, share it.
-
----
+MIT — see [LICENSE](LICENSE).
 
 ## Author
 
-Built for Vartdal (nobody174) — distributed, offline-first, encrypted knowledge management.
+Built by Vartdal ([@nobody174](https://github.com/nobody174)).
 
-**Ready to build?** → Start with `CLAUDE_CODE_BUILD_PLAN.md` 🚀
+Built with Claude Code. Tested on production. Ready for public launch.

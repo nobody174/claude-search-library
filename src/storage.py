@@ -136,18 +136,24 @@ def _run_schema_upgrades(conn: sqlite3.Connection) -> None:
 
 
 def compute_session_hash(session_dict: dict) -> str:
-    """Compute a SHA256 hash of session content, for deduplication.
+    """Compute a SHA256 hash of session content, for deduplication and
+    integrity verification.
 
-    The hash covers the actual conversation content (messages, title,
-    source) rather than just the session id, so two independently-collected
-    exports of the same conversation hash identically even if their IDs
-    differ.
+    The hash covers only `messages` and `title` — fields present verbatim
+    in the original export file — rather than the session id or any field
+    added during normalization (source, device, tokens_approx, etc.). This
+    is deliberate: the same conversation collected from two different
+    sources/devices should hash identically, and verify_archive() re-reads
+    and re-hashes the *raw file on disk* to detect corruption, which only
+    works if hashing is defined purely on the raw content shape rather than
+    on collector.py's internal normalized representation. Callers must pass
+    the raw export dict (as loaded from the JSON file), not a
+    normalize_session()-shaped dict.
     """
     content = json.dumps(
         {
             "messages": session_dict.get("messages", []),
             "title": session_dict.get("title", ""),
-            "source": session_dict.get("source", ""),
         },
         sort_keys=True,
     )
@@ -365,11 +371,19 @@ class Storage:
         ).fetchone()
         return row is not None
 
-    def store_session_with_hash(self, session_dict: dict) -> dict:
+    def store_session_with_hash(self, session_dict: dict, hash_source: Optional[dict] = None) -> dict:
         """Insert a session, computing its content hash and skipping the
         insert entirely if a session with the same content already exists.
+
+        By default the hash is computed from `session_dict` itself (its
+        `messages`/`title` fields). Pass `hash_source` to hash a different
+        dict instead — e.g. the original raw export dict rather than a
+        normalized/reshaped version — so the stored hash matches what a
+        later re-read of the raw file on disk (see verify_archive()) will
+        recompute. `session_dict`'s own `messages`/`title` are otherwise
+        unused for hashing when `hash_source` is given.
         """
-        content_hash = compute_session_hash(session_dict)
+        content_hash = compute_session_hash(hash_source if hash_source is not None else session_dict)
 
         if self.check_duplicate(content_hash):
             return {"status": "skipped_duplicate", "hash": content_hash}

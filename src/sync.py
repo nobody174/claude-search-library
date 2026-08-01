@@ -26,10 +26,21 @@ LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "sync.log"
 DEFAULT_REPO_PATH = Path.home() / ".claude-search-library" / "repo"
 DEFAULT_SYNC_INTERVAL_SECONDS = 300
 
+ENCRYPTED_SESSIONS_DIR = "encrypted_sessions"
 ENCRYPTED_SUMMARIES_DIR = "encrypted_summaries"
 ENCRYPTED_RAW_CHATS_DIR = "encrypted_raw_chats"
 SECRETS_FILENAME = "secrets.enc"
 SYNC_METADATA_FILENAME = "sync_metadata.json"
+
+# Session fields that are meaningful across devices. raw_file_path and
+# summary_file_path are deliberately excluded - they're local filesystem
+# paths on the pushing device and would be both meaningless and potentially
+# identity-leaking (local username, directory layout) on another device.
+SYNCED_SESSION_FIELDS = [
+    "id", "source", "device", "title", "created_at", "updated_at",
+    "duration_seconds", "message_count", "user_message_count",
+    "assistant_message_count", "content_hash", "status",
+]
 
 
 def _setup_file_logging() -> None:
@@ -161,8 +172,10 @@ class SyncWorker:
         device_id = _device_id()
         last_sync_at = metadata.get("devices", {}).get(device_id, {}).get("last_sync_at")
 
+        sessions_dir = self.repo_path / ENCRYPTED_SESSIONS_DIR
         summaries_dir = self.repo_path / ENCRYPTED_SUMMARIES_DIR
         raw_dir = self.repo_path / ENCRYPTED_RAW_CHATS_DIR
+        sessions_dir.mkdir(parents=True, exist_ok=True)
         summaries_dir.mkdir(parents=True, exist_ok=True)
         raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -173,6 +186,18 @@ class SyncWorker:
                 updated = session.get("updated_at") or session.get("created_at") or ""
                 if last_sync_at and updated <= last_sync_at:
                     continue
+
+                # Session metadata must be pushed too, not just the summary:
+                # a fresh device pulling a summary for a session it has
+                # never heard of would otherwise hit summaries.session_id's
+                # foreign key to sessions.id and fail outright.
+                session_fields = {k: session.get(k) for k in SYNCED_SESSION_FIELDS}
+                blob = crypto.encrypt_data(
+                    json.dumps(session_fields).encode("utf-8"), self.encryption_key
+                )
+                session_path = sessions_dir / f"{session['id']}_session.enc"
+                session_path.write_text(blob, encoding="utf-8")
+                files_changed.append(str(session_path.relative_to(self.repo_path)))
 
                 summary = db.get_summary(session["id"])
                 if summary is not None:
@@ -212,11 +237,38 @@ class SyncWorker:
             logger.error("pull failed: %s", e)
             raise
 
+        sessions_dir = self.repo_path / ENCRYPTED_SESSIONS_DIR
         summaries_dir = self.repo_path / ENCRYPTED_SUMMARIES_DIR
         files_changed = 0
         conflicts = 0
 
         with Storage(self.db_path) as db:
+            # Sessions must land before summaries: summaries.session_id has
+            # a foreign key to sessions.id, so pulling a summary for a
+            # session this device has never seen (a fresh/second device,
+            # or one that pulls before it has locally collected anything)
+            # would otherwise fail outright.
+            for enc_path in sorted(sessions_dir.glob("*_session.enc")) if sessions_dir.exists() else []:
+                session_id = enc_path.stem.replace("_session", "")
+                try:
+                    decrypted = crypto.decrypt_data(enc_path.read_text(encoding="utf-8"), self.encryption_key)
+                    incoming_session = json.loads(decrypted)
+                except Exception as e:
+                    logger.error("failed to decrypt/parse %s: %s", enc_path, e)
+                    continue
+
+                existing = db.get_session(session_id)
+                if existing is None:
+                    db.insert_session(incoming_session)
+                else:
+                    # Last-Write-Wins on timestamp; cr-sqlite (when loaded, see
+                    # storage.init_db) handles this natively on real CRDT tables.
+                    # This is the plain-SQLite fallback merge policy.
+                    incoming_ts = incoming_session.get("updated_at") or incoming_session.get("created_at") or ""
+                    existing_ts = existing.get("updated_at") or existing.get("created_at") or ""
+                    if incoming_ts > existing_ts:
+                        db.update_session(session_id, incoming_session)
+
             for enc_path in sorted(summaries_dir.glob("*_summary.enc")) if summaries_dir.exists() else []:
                 session_id = enc_path.stem.replace("_summary", "")
                 try:
@@ -226,19 +278,21 @@ class SyncWorker:
                     logger.error("failed to decrypt/parse %s: %s", enc_path, e)
                     continue
 
+                if db.get_session(session_id) is None:
+                    # No matching *_session.enc was pulled for this summary
+                    # (e.g. partial/corrupted push) - skip rather than
+                    # hitting the foreign key constraint.
+                    logger.warning("skipping summary for unknown session %s (no session record found)", session_id)
+                    conflicts += 1
+                    continue
+
                 existing = db.get_session(session_id)
-                if existing is not None:
-                    # Last-Write-Wins on timestamp; cr-sqlite (when loaded, see
-                    # storage.init_db) handles this natively on real CRDT tables.
-                    # This is the plain-SQLite fallback merge policy.
-                    incoming_ts = summary.get("created_at", "")
-                    existing_ts = existing.get("updated_at") or existing.get("created_at") or ""
-                    if incoming_ts and incoming_ts <= existing_ts:
-                        conflicts += 1
-                        continue
-                    db.store_summary(session_id, summary)
-                else:
-                    db.store_summary(session_id, summary)
+                incoming_ts = summary.get("created_at", "")
+                existing_ts = existing.get("updated_at") or existing.get("created_at") or ""
+                if incoming_ts and incoming_ts <= existing_ts and db.get_summary(session_id) is not None:
+                    conflicts += 1
+                    continue
+                db.store_summary(session_id, summary)
                 files_changed += 1
 
         _update_device_metadata(self.repo_path, pending_changes=0)
@@ -246,6 +300,36 @@ class SyncWorker:
             "pull complete: files_changed=%d conflicts=%d", files_changed, conflicts
         )
         return {"direction": "pull", "files_changed": files_changed, "conflicts": conflicts}
+
+    def _reindex_search_index_and_fts5(self) -> None:
+        """Rebuild search_index + FTS5 for all processed sessions.
+
+        reindex_all() (embedder.py) only rebuilds ChromaDB embeddings.
+        Without this, a pulled session is findable by semantic search but
+        not by keyword/hybrid search — the same gap process_batch() has
+        fixed for locally-processed sessions, but pull_from_github() never
+        touches search_index or the FTS5 table at all.
+        """
+        with Storage(self.db_path) as db:
+            for session in db.get_all_sessions():
+                if session.get("status") != "processed":
+                    continue
+                summary = db.get_summary(session["id"])
+                if summary is None:
+                    continue
+                tldr = summary.get("tldr") or ""
+                learnings = summary.get("learnings") or []
+                patterns = summary.get("patterns") or []
+                tags = summary.get("tags") or []
+                searchable_text = " ".join(
+                    [tldr, *(learnings if isinstance(learnings, list) else [str(learnings)]),
+                     *(patterns if isinstance(patterns, list) else [str(patterns)])]
+                ).strip()
+                db.index_session(
+                    session["id"], searchable_text,
+                    keywords=",".join(tags) if isinstance(tags, list) else str(tags),
+                )
+            db.create_fts5_index()
 
     def sync(self, direction: str = "bidirectional") -> dict:
         """Orchestrate a full sync: pull, merge, push, rebuild ChromaDB.
@@ -265,6 +349,10 @@ class SyncWorker:
             if result["pull"] and result["pull"]["files_changed"] > 0:
                 from src.embedder import reindex_all
                 result["reindexed"] = reindex_all(db_path=self.db_path, chroma_path=self.chroma_path)
+                try:
+                    self._reindex_search_index_and_fts5()
+                except Exception as e:
+                    logger.warning("Failed to rebuild search_index/FTS5 after pull: %s", e)
 
             logger.info("sync complete: direction=%s result=%s", direction, result)
             return result

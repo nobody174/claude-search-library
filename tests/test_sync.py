@@ -116,11 +116,22 @@ def test_push_to_github_encrypts_and_commits(repo_path, mock_repo, tmp_path, enc
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.push_to_github()
 
-    assert result["files_changed"] == 1  # summary only, no raw_file_path set
+    assert result["files_changed"] == 2  # session metadata + summary; no raw_file_path set
+    session_path = repo_path / sync.ENCRYPTED_SESSIONS_DIR / "sess-1_session.enc"
     summary_path = repo_path / sync.ENCRYPTED_SUMMARIES_DIR / "sess-1_summary.enc"
+    assert session_path.exists()
     assert summary_path.exists()
 
-    # Verify it's actually encrypted (not plaintext JSON) and round-trips.
+    # Verify both are actually encrypted (not plaintext JSON) and round-trip.
+    session_ciphertext = session_path.read_text(encoding="utf-8")
+    assert "Minecraft" not in session_ciphertext and "claude-ai" not in session_ciphertext
+    decrypted_session = json.loads(crypto.decrypt_data(session_ciphertext, encryption_key))
+    assert decrypted_session["id"] == "sess-1"
+    assert decrypted_session["source"] == "claude-ai"
+    # Local-only fields must not be pushed to another device.
+    assert "raw_file_path" not in decrypted_session
+    assert "summary_file_path" not in decrypted_session
+
     ciphertext = summary_path.read_text(encoding="utf-8")
     assert "session_tldr" not in ciphertext
     decrypted = json.loads(crypto.decrypt_data(ciphertext, encryption_key))
@@ -169,6 +180,67 @@ def test_pull_from_github_decrypts_and_merges(repo_path, mock_repo, tmp_path, en
     with Storage(db_path) as db:
         summary = db.get_summary("sess-remote")
         assert summary["tldr"] == "Did a thing."
+
+
+def test_pull_from_github_fresh_device_with_no_local_sessions(repo_path, mock_repo, tmp_path, encryption_key):
+    """Regression test: a second/fresh device that has never locally
+    collected anything must still be able to pull. Previously
+    pull_from_github() only ever decrypted *_summary.enc and called
+    db.store_summary() directly - since summaries.session_id has a foreign
+    key to sessions.id, this crashed with an IntegrityError on any device
+    that didn't already have a matching session row, which is exactly the
+    normal case for a second device joining an existing archive.
+    """
+    db_path = str(tmp_path / "test.db")
+    sessions_dir = repo_path / sync.ENCRYPTED_SESSIONS_DIR
+    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
+    sessions_dir.mkdir(parents=True)
+    summaries_dir.mkdir(parents=True)
+
+    # No db.insert_session() call here - this device has never seen
+    # "sess-remote" before. Both the session metadata and the summary
+    # arrive only via the encrypted pull.
+    remote_session = _sample_session("sess-remote")
+    session_blob = crypto.encrypt_data(json.dumps(remote_session).encode("utf-8"), encryption_key)
+    (sessions_dir / "sess-remote_session.enc").write_text(session_blob, encoding="utf-8")
+
+    remote_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
+    summary_blob = crypto.encrypt_data(json.dumps(remote_summary).encode("utf-8"), encryption_key)
+    (summaries_dir / "sess-remote_summary.enc").write_text(summary_blob, encoding="utf-8")
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    result = worker.pull_from_github()  # must not raise IntegrityError
+
+    assert result["files_changed"] == 1
+    assert result["conflicts"] == 0
+
+    with Storage(db_path) as db:
+        session = db.get_session("sess-remote")
+        summary = db.get_summary("sess-remote")
+
+    assert session is not None
+    assert session["source"] == "claude-ai"
+    assert summary["tldr"] == "Did a thing."
+
+
+def test_pull_from_github_summary_without_matching_session_is_skipped(repo_path, mock_repo, tmp_path, encryption_key):
+    """A summary with no corresponding *_session.enc (e.g. a partial or
+    corrupted push) must be skipped gracefully, not crash the whole pull."""
+    db_path = str(tmp_path / "test.db")
+    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
+    summaries_dir.mkdir(parents=True)
+
+    orphan_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
+    blob = crypto.encrypt_data(json.dumps(orphan_summary).encode("utf-8"), encryption_key)
+    (summaries_dir / "sess-orphan_summary.enc").write_text(blob, encoding="utf-8")
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    result = worker.pull_from_github()  # must not raise
+
+    assert result["files_changed"] == 0
+    assert result["conflicts"] == 1
+    with Storage(db_path) as db:
+        assert db.get_session("sess-orphan") is None
 
 
 def test_pull_from_github_lww_conflict_keeps_newer_local(repo_path, mock_repo, tmp_path, encryption_key):
@@ -231,6 +303,37 @@ def test_sync_reindexes_when_pull_has_changes(repo_path, mock_repo, tmp_path, en
     result = worker.sync(direction="bidirectional")
     assert result["reindexed"] == 3
     assert len(reindex_calls) == 1
+
+
+def test_sync_populates_search_index_and_fts5_after_pull(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
+    """Regression test: after a pull brings in new data, sync() must make
+    it findable by keyword/hybrid search too, not just semantic search.
+    reindex_all() (called for ChromaDB) never touches search_index or the
+    FTS5 table - previously a pulled session was semantically searchable
+    but invisible to keyword_search() until someone happened to run
+    create_fts5_index() by hand.
+    """
+    db_path = str(tmp_path / "test.db")
+    with Storage(db_path) as db:
+        db.insert_session(_sample_session("sess-pulled"))
+        db.store_summary("sess-pulled", SAMPLE_SUMMARY)
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    monkeypatch.setattr(worker, "pull_from_github", lambda: {"direction": "pull", "files_changed": 1, "conflicts": 0})
+    monkeypatch.setattr(worker, "push_to_github", lambda: {"direction": "push", "files_changed": 0, "conflicts": 0})
+    monkeypatch.setattr("src.embedder.reindex_all", lambda **kw: 1)
+
+    worker.sync(direction="bidirectional")
+
+    with Storage(db_path) as db:
+        index_row = db.conn.execute(
+            "SELECT searchable_text FROM search_index WHERE session_id = ?", ("sess-pulled",)
+        ).fetchone()
+        fts5_results = db.search_fts5("thing")  # SAMPLE_SUMMARY's tldr is "Did a thing."
+
+    assert index_row is not None
+    assert "Did a thing" in index_row["searchable_text"]
+    assert any(r["session_id"] == "sess-pulled" for r in fts5_results)
 
 
 def test_sync_propagates_errors(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):

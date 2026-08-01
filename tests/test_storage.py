@@ -212,6 +212,53 @@ def test_compute_session_hash_differs_on_content_change():
     assert compute_session_hash(session_a) != compute_session_hash(session_b)
 
 
+def test_compute_session_hash_ignores_source():
+    """The hash must be a property of the raw export's content
+    (messages/title) only. Including 'source' would mean the exact same
+    raw export file hashes differently depending on which collector read
+    it, or hashes differently when collect.py's normalized dict (which
+    adds 'source') is compared against a raw re-read of the same file that
+    has no 'source' key at all (verify_archive()'s hash check does exactly
+    that re-read)."""
+    with_source = {"messages": [{"role": "user", "content": "hi"}], "title": "t", "source": "claude-ai"}
+    without_source = {"messages": [{"role": "user", "content": "hi"}], "title": "t"}
+    assert compute_session_hash(with_source) == compute_session_hash(without_source)
+
+
+def test_compute_session_hash_matches_raw_export_shape():
+    """The exact shape a raw export file has on disk (messages with role,
+    content, and timestamp; a title; no 'source' key) must hash identically
+    whether read directly or passed through unchanged."""
+    raw_export = {
+        "id": "some-id",
+        "title": "Debugging session",
+        "created_at": "2026-01-01T00:00:00Z",
+        "messages": [
+            {"role": "user", "content": "hi", "timestamp": "2026-01-01T00:00:01Z"},
+            {"role": "assistant", "content": "hello", "timestamp": "2026-01-01T00:00:02Z"},
+        ],
+    }
+    assert compute_session_hash(raw_export) == compute_session_hash(dict(raw_export))
+
+
+def test_store_session_with_hash_uses_hash_source_when_given(db):
+    """store_session_with_hash(session_dict, hash_source=...) must hash
+    hash_source, not session_dict — this is what lets collector.py store a
+    normalized session while hashing the original raw file, so the stored
+    hash matches what verify_archive() recomputes later."""
+    session = dict(SAMPLE_SESSION, id="sess-hash-source")
+    del session["content_hash"]
+
+    raw_export = {"messages": [{"role": "user", "content": "raw content"}], "title": "raw title"}
+    expected_hash = compute_session_hash(raw_export)
+
+    result = db.store_session_with_hash(session, hash_source=raw_export)
+
+    assert result["hash"] == expected_hash
+    stored = db.get_session("sess-hash-source")
+    assert stored["content_hash"] == expected_hash
+
+
 def test_store_session_with_hash_inserts_new_session(db):
     session = dict(SAMPLE_SESSION, id="sess-hash-1")
     del session["content_hash"]  # let store_session_with_hash compute it

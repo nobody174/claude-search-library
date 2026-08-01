@@ -1,8 +1,11 @@
 """Processing & summarization module for Claude Search Library.
 
 Summarizes chat sessions using the Claude API, batching requests to respect
-rate limits, retrying transient failures with backoff, and writing sidecar
-summary JSON files next to each raw chat export.
+rate limits, retrying transient failures with backoff, writing summary JSON
+files to a dedicated summaries directory (kept separate from the raw export
+folders, which collect_all() rescans on every run), and making each
+summarized session immediately searchable (search_index + ChromaDB
+embedding + FTS5 index rebuild) rather than only after a device sync.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "processing.log"
 NEEDS_REVIEW_DIR = Path.home() / ".claude-search-library" / "needs_review"
+SUMMARIES_DIR = Path.home() / ".claude-search-library" / "summaries"
 
 MODEL = "claude-opus-5"
 MAX_INPUT_TOKENS = 16000
@@ -185,89 +189,163 @@ def _save_needs_review(chat_dict: dict, partial_summary: dict) -> None:
         json.dump({"chat": chat_dict, "partial_summary": partial_summary}, f, indent=2)
 
 
-def _save_summary_sidecar(raw_path: str, summary: dict) -> str:
-    raw = Path(raw_path)
-    sidecar_path = raw.with_name(f"{raw.stem}_summary.json")
+def _save_summary_sidecar(session_id: str, summary: dict) -> str:
+    """Write the summary JSON to a dedicated summaries directory, keyed by
+    session id.
+
+    Deliberately NOT written next to the raw export file: collect_all()
+    scans the raw export folders for *.json on every run, and a sidecar
+    written there (the previous behavior) gets silently re-ingested as if
+    it were a brand-new chat export the next time `collect` runs — corrupting
+    the archive with a fake session on every collect-after-process cycle.
+    """
+    SUMMARIES_DIR.mkdir(parents=True, exist_ok=True)
+    sidecar_path = SUMMARIES_DIR / f"{session_id}_summary.json"
     with open(sidecar_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     return str(sidecar_path)
 
 
-def _load_session(session_id: str, sessions_dir: Path) -> Optional[dict]:
-    for path in sessions_dir.glob("*.json"):
-        if path.stem.endswith("_summary"):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        if data.get("id") == session_id:
-            data["_raw_path"] = str(path)
-            return data
-    return None
+def _load_session(session_id: str, db) -> Optional[dict]:
+    """Look up a session's raw chat file via its recorded raw_file_path in
+    Storage, rather than scanning a hardcoded directory. This is
+    source-agnostic: it works regardless of which collector (claude-ai,
+    vscode, cowork, local) originally imported the session, since Storage
+    is the single source of truth for where each session's raw file lives.
+    """
+    session = db.get_session(session_id)
+    if session is None or not session.get("raw_file_path"):
+        return None
+
+    raw_path = session["raw_file_path"]
+    try:
+        with open(raw_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    data["id"] = session_id
+    data.setdefault("title", session.get("title"))
+    data["_raw_path"] = raw_path
+    return data
 
 
 def process_batch(
     session_ids: list,
     api_key: str,
     batch_size: int = 10,
-    sessions_dir: Optional[str] = None,
+    db_path: Optional[str] = None,
 ) -> dict:
     """Process a batch of sessions, respecting the 10 calls/minute rate limit.
 
-    Looks up each session's raw JSON in `sessions_dir`, summarizes it, and
-    writes the sidecar summary file. Applies exponential backoff on
-    transient (timeout/rate-limit/server) failures, up to 3 retries per
-    session. Returns a per-session result mapping.
+    Looks up each session's raw JSON via its raw_file_path in Storage,
+    summarizes it, writes the sidecar summary file, stores the summary in
+    the `summaries` table, and marks the session `processed`. Applies
+    exponential backoff on transient (timeout/rate-limit/server) failures,
+    up to 3 retries per session. Returns a per-session result mapping.
     """
+    from src.storage import Storage  # local import: avoids a hard dependency for callers that only summarize
+
     _setup_file_logging()
-    sessions_dir_path = Path(sessions_dir) if sessions_dir else (
-        Path.home() / ".claude-search-library" / "raw_chats"
-    )
 
     results = {"succeeded": [], "failed": [], "needs_review": []}
     calls_this_minute = 0
     minute_start = time.monotonic()
 
-    for i in range(0, len(session_ids), batch_size):
-        batch = session_ids[i : i + batch_size]
-        for session_id in batch:
-            if calls_this_minute >= MAX_CALLS_PER_MINUTE:
-                elapsed = time.monotonic() - minute_start
-                if elapsed < 60:
-                    time.sleep(60 - elapsed)
-                calls_this_minute = 0
-                minute_start = time.monotonic()
+    with Storage(db_path) as db:
+        for i in range(0, len(session_ids), batch_size):
+            batch = session_ids[i : i + batch_size]
+            for session_id in batch:
+                if calls_this_minute >= MAX_CALLS_PER_MINUTE:
+                    elapsed = time.monotonic() - minute_start
+                    if elapsed < 60:
+                        time.sleep(60 - elapsed)
+                    calls_this_minute = 0
+                    minute_start = time.monotonic()
 
-            chat_dict = _load_session(session_id, sessions_dir_path)
-            if chat_dict is None:
-                _log_event(session_id, "not_found")
-                results["failed"].append(session_id)
-                continue
+                chat_dict = _load_session(session_id, db)
+                if chat_dict is None:
+                    _log_event(session_id, "not_found")
+                    results["failed"].append(session_id)
+                    continue
 
-            raw_path = chat_dict.pop("_raw_path")
-            success = _summarize_with_backoff(chat_dict, api_key, raw_path, results)
-            calls_this_minute += 1
-            if success:
-                results["succeeded"].append(session_id)
+                chat_dict.pop("_raw_path")
+                success = _summarize_with_backoff(chat_dict, api_key, results, db)
+                calls_this_minute += 1
+                if success:
+                    results["succeeded"].append(session_id)
+
+        if results["succeeded"]:
+            # Rebuild once per batch, not per session: create_fts5_index()
+            # is a full drop-and-repopulate over the whole summaries table,
+            # so doing it per-session would be O(n^2) over a large batch.
+            try:
+                db.create_fts5_index()
+            except Exception as e:
+                logger.warning("Failed to rebuild FTS5 index after batch: %s", e)
 
     return results
 
 
-def _summarize_with_backoff(chat_dict: dict, api_key: str, raw_path: str, results: dict) -> bool:
+def _index_for_search(session_id: str, summary: dict, db) -> None:
+    """Make a freshly-summarized session actually findable.
+
+    Populates both search backends independently: search_index (used by
+    the LIKE-based keyword fallback) and ChromaDB (used by semantic
+    search). Neither happens automatically elsewhere on a single device —
+    previously this only happened as a side effect of sync.py pulling
+    changes from another device (reindex_all()), so a solo user who never
+    syncs would process sessions successfully and still get zero search
+    results, silently, forever. Best-effort: embedding/indexing failures
+    are logged but never fail the overall process_batch() call, since the
+    summary itself is already safely persisted at this point.
+    """
+    from src.embedder import embed_session
+
+    session = db.get_session(session_id)
+    tldr = summary.get("session_tldr") or summary.get("tldr") or ""
+    learnings = summary.get("learnings") or []
+    patterns = summary.get("patterns") or []
+    tags = summary.get("tags") or []
+    searchable_text = " ".join(
+        [tldr, *(learnings if isinstance(learnings, list) else [str(learnings)]),
+         *(patterns if isinstance(patterns, list) else [str(patterns)])]
+    ).strip()
+
+    try:
+        db.index_session(session_id, searchable_text, keywords=",".join(tags) if isinstance(tags, list) else str(tags))
+    except Exception as e:
+        logger.warning("Failed to update search_index for %s: %s", session_id, e)
+
+    try:
+        merged = dict(summary)
+        if session:
+            merged["source"] = session.get("source")
+            merged["device"] = session.get("device")
+            merged["created_at"] = session.get("created_at")
+        embed_session(session_id, merged)
+    except Exception as e:
+        logger.warning("Failed to embed session %s into ChromaDB: %s", session_id, e)
+
+
+def _summarize_with_backoff(chat_dict: dict, api_key: str, results: dict, db) -> bool:
     session_id = chat_dict.get("id", "unknown")
     delay = 1.0
     for attempt in range(1, MAX_BACKOFF_RETRIES + 1):
         try:
             summary = summarize_chat(chat_dict, api_key)
-            _save_summary_sidecar(raw_path, summary)
+            sidecar_path = _save_summary_sidecar(session_id, summary)
+            db.store_summary(session_id, summary)
+            db.update_session(session_id, {"summary_file_path": sidecar_path})
+            db.mark_as_processed(session_id, "processed")
+            _index_for_search(session_id, summary, db)
             return True
         except anthropic.APITimeoutError:
             _log_event(session_id, "timeout_skip")
             return False
         except ValueError:
             results["needs_review"].append(session_id)
+            db.mark_for_review(session_id, "Summary failed schema validation")
             return False
         except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
             if attempt == MAX_BACKOFF_RETRIES:

@@ -106,6 +106,12 @@ def _load_json_files(folder: Path) -> list[tuple[dict, str]]:
     if not folder.exists() or not folder.is_dir():
         return results
     for path in sorted(folder.glob("*.json")):
+        if path.stem.endswith("_summary"):
+            # Defense in depth: processor.py writes summaries to a separate
+            # directory precisely to avoid this, but skip them here too in
+            # case a collector folder ever ends up pointed at that
+            # directory (e.g. a future --local-folder misconfiguration).
+            continue
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -180,16 +186,78 @@ def collect_from_local(folder_path: str) -> list[dict]:
     return sessions
 
 
+def _session_to_storage_dict(session: dict) -> dict:
+    """Map a normalize_session() dict onto Storage.SESSION_COLUMNS.
+
+    normalize_session() produces a richer in-memory schema (messages, tags,
+    raw_path) than the sessions table stores directly; this adapts field
+    names (raw_path -> raw_file_path) and fills in the columns Storage
+    expects for insert_session().
+    """
+    return {
+        "id": session["id"],
+        "source": session["source"],
+        "device": session["device"],
+        "title": session["title"],
+        "created_at": session["created_at"],
+        "updated_at": session["updated_at"],
+        "duration_seconds": session["duration_seconds"],
+        "message_count": session["message_count"],
+        "user_message_count": session["user_message_count"],
+        "assistant_message_count": session["assistant_message_count"],
+        "raw_file_path": session.get("raw_path") or None,
+        "summary_file_path": None,
+        "processed_at": None,
+        "status": "new",
+        "review_reason": None,
+        "synced_at": None,
+        "sync_version": 1,
+    }
+
+
+def _load_raw_export_for_hash(session: dict) -> Optional[dict]:
+    """Re-read a session's original export file for content hashing.
+
+    compute_session_hash() must see the same bytes verify_archive() will
+    later see when it re-reads and re-hashes the file from disk (see the
+    docstring on compute_session_hash in storage.py) — so this re-parses
+    the raw file rather than reconstructing an approximation from the
+    already-normalized session dict, which previously caused hashes to
+    mismatch (normalize_session() adds tokens_approx and backfills
+    timestamp, neither of which exist in the original file).
+
+    Returns None if there's no raw_path recorded or the file can't be
+    read, in which case the caller falls back to hashing the normalized
+    session — internally consistent, but won't match a later re-read.
+    """
+    raw_path = session.get("raw_path")
+    if not raw_path:
+        return None
+    try:
+        with open(raw_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def collect_all(
     claude_ai_folder: Optional[str] = None,
     vscode_extensions_path: Optional[str] = None,
     cowork_path: Optional[str] = None,
     local_folder: Optional[str] = None,
+    db_path: Optional[str] = None,
 ) -> dict:
-    """Run all collectors and return a summary of results.
+    """Run all collectors, persist new sessions to storage, and return a
+    summary of results.
 
     Errors in one collector do not prevent the others from running.
+    Sessions are deduplicated by content hash via
+    Storage.store_session_with_hash() — re-collecting the same conversation
+    (even under a different id or from a different source folder) is a
+    no-op rather than a duplicate row.
     """
+    from src.storage import Storage  # local import: avoids a hard dependency for callers that only normalize
+
     base = Path.home() / ".claude-search-library" / "data" / "raw_exports"
     claude_ai_folder = claude_ai_folder or str(base / "claude-ai")
     local_folder = local_folder or str(base / "local")
@@ -213,14 +281,28 @@ def collect_all(
             errors += 1
 
     seen_ids = set()
-    new_sessions = []
+    deduped_sessions = []
     for s in all_sessions:
         if s["id"] not in seen_ids:
             seen_ids.add(s["id"])
-            new_sessions.append(s)
+            deduped_sessions.append(s)
+
+    new_count = 0
+    with Storage(db_path) as db:
+        for session in deduped_sessions:
+            try:
+                hash_source = _load_raw_export_for_hash(session)
+                result = db.store_session_with_hash(
+                    _session_to_storage_dict(session), hash_source=hash_source
+                )
+                if result["status"] == "inserted":
+                    new_count += 1
+            except Exception as e:
+                logger.error("Failed to store session %s: %s", session.get("id"), e)
+                errors += 1
 
     return {
-        "new": len(new_sessions),
+        "new": new_count,
         "errors": errors,
         "total": len(all_sessions),
     }
