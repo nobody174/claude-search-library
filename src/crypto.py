@@ -13,6 +13,7 @@ import getpass
 import logging
 import os
 import secrets as secrets_module
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -103,7 +104,18 @@ def build_totp_uri(totp_secret: str, account_name: str = "claude-search-library"
 
 
 def display_qr_code(uri: str) -> None:
-    """Render the enrollment URI as a QR code in the terminal."""
+    """Render the enrollment URI as a QR code in the terminal.
+
+    print_ascii() writes block-drawing characters that the default
+    Windows console codepage (cp1252) can't encode, raising
+    UnicodeEncodeError before anything is even printed. Force stdout to
+    UTF-8 first; this is safe to call repeatedly and is a no-op on
+    terminals already in UTF-8 (e.g. most Linux/macOS shells).
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     qr = qrcode.QRCode()
     qr.add_data(uri)
     qr.make(fit=True)
@@ -186,6 +198,31 @@ def _prompt_passphrase_and_totp_combined(gui_title: str) -> tuple:
     return passphrase, code
 
 
+def _prompt_passphrase_gui_aware(gui_title: str = "Enter Master Passphrase") -> str:
+    """Prompt for just the master passphrase, GUI-first with a terminal fallback.
+
+    Used by join_device_existing_setup(), where the passphrase must be
+    collected and used to decrypt the TOTP secret *before* the QR code (and
+    therefore the TOTP prompt) can even be shown — so it can't share a
+    single combined popup with the TOTP step the way setup_device_first_time
+    does. Mirrors _prompt_totp_only_gui_aware's structure and logging.
+    """
+    if USE_GUI_AUTH:
+        try:
+            from src import auth_ui
+        except Exception as e:
+            logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
+        else:
+            try:
+                return auth_ui.prompt_passphrase_only(title=gui_title)
+            except auth_ui.AuthCancelled:
+                raise ValueError("Authentication was cancelled")
+            except Exception as e:
+                logger.warning("GUI auth popup failed, falling back to terminal: %r", e)
+
+    return _prompt_passphrase()
+
+
 def _prompt_totp_only_gui_aware(gui_title: str = "Confirm Authenticator Code") -> str:
     """Prompt for just a TOTP code, GUI-first with a terminal fallback.
 
@@ -205,6 +242,8 @@ def _prompt_totp_only_gui_aware(gui_title: str = "Confirm Authenticator Code") -
                 return auth_ui.prompt_totp_only(title=gui_title)
             except auth_ui.AuthCancelled:
                 raise ValueError("Authentication was cancelled")
+            except Exception as e:
+                logger.warning("GUI auth popup failed, falling back to terminal: %r", e)
 
     return _prompt_totp_code()
 
@@ -266,7 +305,7 @@ def join_device_existing_setup() -> dict:
     """Join-device flow: fetch + decrypt the existing TOTP secret, verify, derive the key."""
     _setup_file_logging()
 
-    passphrase = _prompt_passphrase()
+    passphrase = _prompt_passphrase_gui_aware("Join Existing Device")
     encrypted_totp = _fetch_secrets_from_github()
 
     passphrase_key = _derive_passphrase_only_key(passphrase)

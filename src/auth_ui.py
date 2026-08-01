@@ -205,6 +205,81 @@ def prompt_passphrase_and_totp(title: str = "Unlock Claude Search Library") -> d
     return _run_popup(build)
 
 
+def prompt_passphrase_only(title: str = "Enter Master Passphrase") -> str:
+    """Show a dark popup asking only for the master passphrase.
+
+    Used where the TOTP secret isn't known yet (e.g. joining an existing
+    device, where the passphrase must decrypt the TOTP secret before its
+    QR code can even be shown) so a combined passphrase+TOTP popup can't
+    be used. Returns the entered passphrase. Raises AuthCancelled if the
+    window is closed without submitting.
+    """
+
+    def build(root, result):
+        import tkinter as tk
+        from tkinter import font as tkfont
+
+        root.title(title)
+        root.configure(bg=BG)
+        root.resizable(False, False)
+        _center_window(root, 340, 200)
+        root.attributes("-topmost", True)
+
+        heading_font = tkfont.Font(family="Segoe UI", size=15, weight="bold")
+        label_font = tkfont.Font(family="Segoe UI", size=10)
+
+        panel = tk.Frame(root, bg=BG_PANEL, highlightbackground=BORDER, highlightthickness=1)
+        panel.pack(fill="both", expand=True, padx=16, pady=16)
+
+        tk.Label(panel, text=title, bg=BG_PANEL, fg=FG, font=heading_font).pack(
+            anchor="w", padx=20, pady=(20, 16)
+        )
+
+        tk.Label(panel, text="Master passphrase", bg=BG_PANEL, fg=FG, font=label_font).pack(
+            anchor="w", padx=20
+        )
+        passphrase_entry = tk.Entry(panel)
+        _style_entry(passphrase_entry, show="•")
+        passphrase_entry.pack(fill="x", padx=20, pady=(4, 8), ipady=6)
+
+        error_label = tk.Label(panel, text="", bg=BG_PANEL, fg=ERROR, font=label_font)
+        error_label.pack(anchor="w", padx=20)
+
+        def submit(_event=None):
+            passphrase = passphrase_entry.get()
+            if not passphrase:
+                error_label.configure(text="Passphrase is required")
+                return
+            result.update({"passphrase": passphrase})
+            root.quit()
+
+        def cancel(_event=None):
+            root.quit()
+
+        button_row = tk.Frame(panel, bg=BG_PANEL)
+        button_row.pack(fill="x", padx=20, pady=(8, 20))
+
+        tk.Button(
+            button_row, text="Cancel", command=cancel,
+            bg=BG_PANEL, fg=FG_MUTED, activebackground=BG_PANEL, activeforeground=FG,
+            relief="flat", font=label_font, bd=0, cursor="hand2",
+        ).pack(side="right", padx=(8, 0))
+
+        tk.Button(
+            button_row, text="Continue", command=submit,
+            bg=ACCENT, fg="#ffffff", activebackground="#4a78e0", activeforeground="#ffffff",
+            relief="flat", font=("Segoe UI", 10, "bold"), bd=0, padx=16, pady=6, cursor="hand2",
+        ).pack(side="right")
+
+        root.bind("<Return>", submit)
+        root.bind("<Escape>", cancel)
+        root.protocol("WM_DELETE_WINDOW", cancel)
+        passphrase_entry.focus_set()
+
+    result = _run_popup(build)
+    return result["passphrase"]
+
+
 def prompt_totp_only(title: str = "Confirm sync") -> str:
     """Show a dark popup asking only for a live TOTP code.
 
