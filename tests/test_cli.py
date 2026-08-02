@@ -104,8 +104,11 @@ def test_search_subcommand_shows_search_type_when_present(runner, monkeypatch):
     assert "found via:  keyword" in result.output
 
 
-def test_collect_command_runs_collect_all(runner, monkeypatch):
-    monkeypatch.setattr("src.collector.collect_all", lambda: {"new": 3, "errors": 0, "total": 3})
+def test_collect_command_runs_orchestration(runner, monkeypatch):
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda sources=None, fail_fast=False: {"new": 3, "errors": 0, "total": 3, "sources": {}},
+    )
     result = runner.invoke(cli.cli, ["collect"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -113,10 +116,28 @@ def test_collect_command_runs_collect_all(runner, monkeypatch):
 
 
 def test_collect_command_dry_run(runner, monkeypatch):
-    monkeypatch.setattr("src.collector.collect_all", lambda: {"new": 5, "errors": 1, "total": 6})
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda sources=None, fail_fast=False: {"new": 5, "errors": 1, "total": 6, "sources": {}},
+    )
     result = runner.invoke(cli.cli, ["collect", "--dry-run"])
     assert result.exit_code == 0
     assert "Would collect: 5 new, 6 total, 1 errors" in result.output
+
+
+def test_collect_command_source_filter(runner, monkeypatch):
+    captured = {}
+
+    def fake_run_collection(sources=None, fail_fast=False):
+        captured["sources"] = sources
+        captured["fail_fast"] = fail_fast
+        return {"new": 0, "errors": 0, "total": 0, "sources": {}}
+
+    monkeypatch.setattr("src.orchestration.run_collection", fake_run_collection)
+    result = runner.invoke(cli.cli, ["collect", "--source", "claude-ai", "--fail-fast"])
+    assert result.exit_code == 0
+    assert captured["sources"] == ["claude-ai"]
+    assert captured["fail_fast"] is True
 
 
 def test_collect_command_watch_invokes_watch_loop(runner, monkeypatch):

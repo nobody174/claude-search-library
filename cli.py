@@ -60,13 +60,27 @@ def query_command(query: str) -> None:
 @cli.command()
 @click.option("--watch", is_flag=True, help="Run collection continuously")
 @click.option("--dry-run", is_flag=True, help="Show what would be collected without writing")
-def collect(watch: bool, dry_run: bool) -> None:
+@click.option(
+    "--source", "sources",
+    multiple=True,
+    type=click.Choice(["claude-ai", "vscode", "cowork", "local"]),
+    help="Collect from only this source (repeatable). Default: all sources.",
+)
+@click.option(
+    "--fail-fast", is_flag=True,
+    help="Stop on the first collector/storage error instead of logging and continuing "
+         "(default: off, suited to automated/cron runs).",
+)
+def collect(watch: bool, dry_run: bool, sources: tuple, fail_fast: bool) -> None:
     """Collect new chats from all configured sources."""
-    from src.collector import collect_all, watch as watch_collect
+    from src.collector import watch as watch_collect
+    from src.orchestration import run_collection
+
+    source_list = list(sources) or None
 
     if dry_run:
         click.echo("Dry run: scanning sources without importing...")
-        result = collect_all()
+        result = run_collection(sources=source_list, fail_fast=fail_fast)
         click.echo(f"Would collect: {result['new']} new, {result['total']} total, {result['errors']} errors")
         return
 
@@ -74,7 +88,7 @@ def collect(watch: bool, dry_run: bool) -> None:
         click.echo("Starting collection watch loop (Ctrl+C to stop)...")
         watch_collect()
     else:
-        result = collect_all()
+        result = run_collection(sources=source_list, fail_fast=fail_fast)
         click.echo(json.dumps(result, indent=2))
 
 
@@ -170,6 +184,24 @@ def verify(verbose: bool, output_json: bool) -> None:
 
     if not result["healthy"]:
         raise SystemExit(1)
+
+
+@cli.command()
+@click.argument("session_id")
+@click.option(
+    "--format", "export_format",
+    type=click.Choice(["markdown"]),
+    default="markdown",
+    show_default=True,
+    help="Export format",
+)
+@click.option("--output", default=None, help="Output file path (default: ~/.claude-search-library/exports/<id>.md)")
+def export(session_id: str, export_format: str, output: str) -> None:
+    """Export a session + its summary as a shareable file."""
+    from src.export import export_session
+
+    path = export_session(session_id, output_path=output)
+    click.echo(f"Exported to {path}")
 
 
 @cli.command()
