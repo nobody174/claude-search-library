@@ -24,7 +24,7 @@ LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "processing.log"
 NEEDS_REVIEW_DIR = Path.home() / ".claude-search-library" / "needs_review"
 SUMMARIES_DIR = Path.home() / ".claude-search-library" / "summaries"
 
-MODEL = "claude-opus-5"
+MODEL = "claude-haiku-4-5"
 MAX_INPUT_TOKENS = 16000
 MAX_CALLS_PER_MINUTE = 10
 REQUEST_TIMEOUT_SECONDS = 30
