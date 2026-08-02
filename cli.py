@@ -197,6 +197,30 @@ def verify(verbose: bool, output_json: bool) -> None:
 
 
 @cli.command()
+@click.option("--month", default=None, help="Report a single month, e.g. 2026-08")
+@click.option("--quarter", default=None, help="Report a single quarter, e.g. 2026-Q3")
+def costs(month: str, quarter: str) -> None:
+    """Report API spend, optionally scoped to a month or quarter."""
+    from src.cost_tracker import get_report
+
+    if month and quarter:
+        raise click.UsageError("Pass only one of --month or --quarter")
+
+    report = get_report(month=month, quarter=quarter)
+    click.echo(f"Period: {report['period']}")
+    click.echo(f"Total calls: {report['calls']}")
+    click.echo(f"Total cost:  ${report['total_cost_usd']:.4f}")
+    if report["by_model"]:
+        click.echo("\nBy model:")
+        for model, stats in report["by_model"].items():
+            click.echo(
+                f"  {model}: {stats['calls']} calls, "
+                f"{stats['input_tokens']} in / {stats['output_tokens']} out tokens, "
+                f"${stats['cost_usd']:.4f}"
+            )
+
+
+@cli.command()
 @click.argument("session_id")
 @click.option(
     "--format", "export_format",

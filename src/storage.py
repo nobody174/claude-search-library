@@ -96,6 +96,20 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS api_costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT REFERENCES sessions(id),
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL,
+    called_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_costs_called_at ON api_costs(called_at);
 """
 
 SESSION_COLUMNS = [
@@ -362,6 +376,72 @@ class Storage:
             "SELECT * FROM redaction_log WHERE session_id = ? ORDER BY id", (session_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- API cost tracking ------------------------------------------
+
+    def log_api_cost(
+        self,
+        session_id: Optional[str],
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+        called_at: Optional[str] = None,
+    ) -> int:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO api_costs
+                    (session_id, model, input_tokens, output_tokens,
+                     cache_creation_input_tokens, cache_read_input_tokens,
+                     cost_usd, called_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
+                    cost_usd,
+                    called_at or datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            return cur.lastrowid
+
+    def get_costs(self, start: Optional[str] = None, end: Optional[str] = None) -> dict:
+        """Aggregate API spend, optionally bounded by ISO timestamp range
+        [start, end). Returns totals plus a per-model breakdown."""
+        query = "SELECT * FROM api_costs WHERE 1=1"
+        params: list = []
+        if start:
+            query += " AND called_at >= ?"
+            params.append(start)
+        if end:
+            query += " AND called_at < ?"
+            params.append(end)
+
+        rows = [dict(r) for r in self.conn.execute(query, params).fetchall()]
+
+        by_model: dict = {}
+        for r in rows:
+            m = by_model.setdefault(
+                r["model"],
+                {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+            )
+            m["calls"] += 1
+            m["input_tokens"] += r["input_tokens"]
+            m["output_tokens"] += r["output_tokens"]
+            m["cost_usd"] += r["cost_usd"]
+
+        return {
+            "calls": len(rows),
+            "total_cost_usd": round(sum(r["cost_usd"] for r in rows), 6),
+            "by_model": {k: {**v, "cost_usd": round(v["cost_usd"], 6)} for k, v in by_model.items()},
+        }
 
     # ---- Utility ---------------------------------------------------
 

@@ -153,7 +153,7 @@ def test_process_batch_rate_limiting(monkeypatch, tmp_path):
             raw_path.write_text(json.dumps(chat), encoding="utf-8")
             db.insert_session(_session_row(sid, raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
     sleep_calls = []
     monkeypatch.setattr(processor.time, "sleep", lambda s: sleep_calls.append(s))
     monkeypatch.setattr(processor, "MAX_CALLS_PER_MINUTE", 2)
@@ -192,7 +192,7 @@ def test_process_batch_writes_summary_sidecar(monkeypatch, tmp_path):
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
 
     results = processor.process_batch(["chat-1"], api_key="fake-key", db_path=db_path)
 
@@ -227,7 +227,7 @@ def test_process_batch_sidecar_not_written_next_to_raw_export(monkeypatch, tmp_p
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
     processor.process_batch(["chat-1"], api_key="fake-key", db_path=db_path)
 
     # Re-run collect_all against the same export folder - it must find only
@@ -254,7 +254,7 @@ def test_process_batch_records_summary_file_path(monkeypatch, tmp_path):
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
     processor.process_batch(["chat-1"], api_key="fake-key", db_path=db_path)
 
     with Storage(db_path) as db:
@@ -277,7 +277,7 @@ def test_process_batch_populates_search_index(monkeypatch, tmp_path):
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
     processor.process_batch(["chat-1"], api_key="fake-key", db_path=db_path)
 
     with Storage(db_path) as db:
@@ -304,7 +304,7 @@ def test_process_batch_rebuilds_fts5_index_after_batch(monkeypatch, tmp_path):
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
     processor.process_batch(["chat-1"], api_key="fake-key", db_path=db_path)
 
     with Storage(db_path) as db:
@@ -327,7 +327,7 @@ def test_process_batch_embeds_into_chromadb(monkeypatch, tmp_path):
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
 
     embed_calls = []
     monkeypatch.setattr(
@@ -357,7 +357,7 @@ def test_process_batch_indexing_failure_does_not_fail_the_session(monkeypatch, t
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
     monkeypatch.setattr(
         "src.embedder.embed_session",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("chroma is down")),
@@ -385,7 +385,7 @@ def test_process_batch_persists_summary_and_marks_processed(monkeypatch, tmp_pat
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key: VALID_SUMMARY)
+    monkeypatch.setattr(processor, "summarize_chat", lambda chat_dict, api_key, **kwargs: VALID_SUMMARY)
 
     processor.process_batch(["chat-1"], api_key="fake-key", db_path=db_path)
 
@@ -410,7 +410,7 @@ def test_process_batch_invalid_schema_marks_needs_review_in_db(monkeypatch, tmp_
     with Storage(db_path) as db:
         db.insert_session(_session_row("chat-1", raw_path))
 
-    def raise_invalid(chat_dict, api_key):
+    def raise_invalid(chat_dict, api_key, **kwargs):
         raise ValueError("bad schema")
 
     monkeypatch.setattr(processor, "summarize_chat", raise_invalid)

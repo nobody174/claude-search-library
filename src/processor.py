@@ -125,13 +125,31 @@ def _validate_summary_schema(summary: dict) -> bool:
     return REQUIRED_SUMMARY_FIELDS.issubset(summary.keys())
 
 
-def summarize_chat(chat_dict: dict, api_key: str) -> dict:
+def _extract_usage(response) -> Optional[dict]:
+    """Pull token usage off an API response, defensively — test doubles and
+    other callers may hand back an object with no `usage` attribute."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    return {
+        "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+        "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+    }
+
+
+def summarize_chat(chat_dict: dict, api_key: str, usage_sink: Optional[list] = None) -> dict:
     """Summarize a single chat session using the Claude API.
 
     Truncates the conversation to ~16k input tokens, calls Claude with the
     session-analysis system prompt, and returns the parsed summary dict.
     Retries up to 3 times on JSON parse errors; raises on schema mismatch
     or exhausted retries.
+
+    If `usage_sink` is given, the token usage of every API call made
+    (including failed-parse retries, which still cost money) is appended
+    to it as a dict — used by _summarize_with_backoff to record cost.
     """
     _setup_file_logging()
     session_id = chat_dict.get("id", "unknown")
@@ -160,6 +178,11 @@ def summarize_chat(chat_dict: dict, api_key: str) -> dict:
         except anthropic.APIStatusError as e:
             _log_event(session_id, "api_error", str(e))
             raise
+
+        if usage_sink is not None:
+            usage = _extract_usage(response)
+            if usage is not None:
+                usage_sink.append(usage)
 
         text = next((b.text for b in response.content if b.type == "text"), "")
         try:
@@ -328,12 +351,24 @@ def _index_for_search(session_id: str, summary: dict, db) -> None:
         logger.warning("Failed to embed session %s into ChromaDB: %s", session_id, e)
 
 
+def _record_call_costs(session_id: str, usage_calls: list, db) -> None:
+    from src import cost_tracker
+
+    for usage in usage_calls:
+        try:
+            cost_tracker.record_usage(db, session_id, MODEL, usage)
+        except Exception as e:
+            logger.warning("Failed to record API cost for %s: %s", session_id, e)
+
+
 def _summarize_with_backoff(chat_dict: dict, api_key: str, results: dict, db) -> bool:
     session_id = chat_dict.get("id", "unknown")
     delay = 1.0
     for attempt in range(1, MAX_BACKOFF_RETRIES + 1):
+        usage_calls: list = []
         try:
-            summary = summarize_chat(chat_dict, api_key)
+            summary = summarize_chat(chat_dict, api_key, usage_sink=usage_calls)
+            _record_call_costs(session_id, usage_calls, db)
             sidecar_path = _save_summary_sidecar(session_id, summary)
             db.store_summary(session_id, summary)
             db.update_session(session_id, {"summary_file_path": sidecar_path})
@@ -344,6 +379,11 @@ def _summarize_with_backoff(chat_dict: dict, api_key: str, results: dict, db) ->
             _log_event(session_id, "timeout_skip")
             return False
         except ValueError:
+            # summarize_chat only raises ValueError after receiving at least
+            # one real response (invalid schema, or JSON-parse retries
+            # exhausted) — every attempt's usage was appended to usage_calls
+            # before the raise, so those tokens are still billed and recorded.
+            _record_call_costs(session_id, usage_calls, db)
             results["needs_review"].append(session_id)
             db.mark_for_review(session_id, "Summary failed schema validation")
             return False
