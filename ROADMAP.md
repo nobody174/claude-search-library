@@ -46,3 +46,24 @@ Features to implement after public launch:
   either value to disk.
 - Should replace the `.env`-based `MASTER_PASSPHRASE`/`TOTP_CODE` workaround
   used for one-off testing.
+
+## 7. Sync/Export Management UI (HIGH)
+- Problem: currently all sync operations (push/pull/collect/process) are
+  CLI-only, driven through Claude Code or a terminal. There's no visual
+  way to see sync status, trigger an export/import, or manage devices
+  without typing commands.
+- Add to public/index.html (or a new dedicated panel):
+  - Sync status dashboard: last push/pull time per device, pending
+    changes count, healthy/unhealthy archive status (from verify_archive())
+  - Manual "Push" / "Pull" / "Sync now" buttons, wired to the existing
+    server.py endpoints (or new ones exposing SyncWorker)
+  - A file-drop/import UI for adding new Claude.ai export JSON files
+    without touching the filesystem directly (currently requires manually
+    placing files in ~/.claude-search-library/data/raw_exports/claude-ai/)
+  - Device list showing all known devices (from sync_metadata) with
+    last-seen timestamps
+- Depends on: exposing SyncWorker's push/pull/sync methods via server.py
+  REST endpoints (currently server.py has no sync-related routes at all)
+- Consider pairing with item #6 (secure credential entry UI) so the whole
+  device-join + sync flow can happen through the web UI instead of the
+  CLI + popup combination used today
