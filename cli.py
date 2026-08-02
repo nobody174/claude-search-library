@@ -3,8 +3,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import click
+
+# Windows consoles default to a legacy codepage (e.g. cp1252) that can't
+# encode characters like the em-dashes and arrows Claude's summaries often
+# contain, crashing click.echo with UnicodeEncodeError. Force UTF-8 output.
+if sys.platform == "win32":
+    for _stream_name in ("stdout", "stderr"):
+        _stream = getattr(sys, _stream_name)
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def _print_results_table(results: list) -> None:
