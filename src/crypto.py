@@ -266,6 +266,37 @@ def _fetch_secrets_from_github() -> str:
     return sync.fetch_file(SECRETS_FILENAME)
 
 
+def resolve_encryption_key(passphrase: str, totp_code: str) -> bytes:
+    """Derive the full encryption key from credentials alone — no prompts, no I/O.
+
+    Non-interactive counterpart to join_device_existing_setup(): fetches the
+    encrypted TOTP secret from GitHub, decrypts it with a passphrase-only
+    key, verifies the live TOTP code, and derives the combined key. Used by
+    server.py so the web UI can pass along {passphrase, totp_code} on each
+    sync request without the server ever caching the derived key between
+    requests, and without the browser needing to replicate Argon2id derivation
+    itself.
+
+    Raises ValueError on any failure (wrong passphrase, wrong TOTP code, or
+    unreachable secrets) — never distinguishes which, to avoid leaking which
+    factor was wrong to a caller that isn't proven to hold both yet.
+    """
+    _setup_file_logging()
+    try:
+        encrypted_totp = _fetch_secrets_from_github()
+        passphrase_key = _derive_passphrase_only_key(passphrase)
+        totp_secret = decrypt_data(encrypted_totp, passphrase_key).decode("utf-8")
+    except Exception as e:
+        logger.warning("resolve_encryption_key: failed to resolve TOTP secret: %s", e)
+        raise ValueError("Invalid passphrase") from e
+
+    if not verify_totp_code(totp_secret, totp_code):
+        logger.warning("resolve_encryption_key: TOTP verification failed")
+        raise ValueError("Invalid TOTP code")
+
+    return derive_encryption_key(passphrase, totp_secret)
+
+
 def setup_device_first_time() -> dict:
     """First-device setup: generate a new TOTP secret, verify it, derive the key.
 

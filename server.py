@@ -2,16 +2,42 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from src import crypto
 from src.search import search as run_search
 from src.storage import Storage
 
+PUBLIC_DIR = Path(__file__).resolve().parent / "public"
+SRC_DIR = Path(__file__).resolve().parent / "src"
+
 app = Flask(__name__)
 CORS(app, origins=["localhost", "127.0.0.1"])
+
+
+@app.route("/", methods=["GET"])
+def index_page():
+    """Serve the web UI itself, so http://localhost:7654/ (or the LAN/phone
+    equivalent per CLAUDE.md's iPhone setup instructions) is enough on its
+    own — matches api.js's assumption that the page and the API share an
+    origin, so relative fetch("/search") etc. calls resolve correctly.
+    """
+    return send_from_directory(PUBLIC_DIR, "index.html")
+
+
+@app.route("/src/<path:filename>", methods=["GET"])
+def src_assets(filename: str):
+    """Serve src/api.js, which index.html loads via a relative ../src/ path."""
+    return send_from_directory(SRC_DIR, filename)
+
+# Where /import writes uploaded Claude.ai export JSON — the same folder
+# collect_from_claude_ai() already watches. A module-level constant (rather
+# than inlining Path.home() in the route) so tests can monkeypatch it to a
+# tmp_path instead of writing into the real user archive.
+RAW_EXPORTS_CLAUDE_AI_DIR = Path.home() / ".claude-search-library" / "data" / "raw_exports" / "claude-ai"
 
 
 @app.route("/setup", methods=["POST"])
@@ -100,6 +126,103 @@ def stats_endpoint():
 
     stats["last_sync"] = rows["last_sync"] if rows else None
     return jsonify(stats)
+
+
+@app.route("/sync", methods=["POST"])
+def sync_endpoint():
+    """POST /sync {passphrase, totp_code, direction}
+
+    direction: "pull" | "push" | "bidirectional" (default).
+
+    Credentials are required on every call and are never cached
+    server-side between requests — see crypto.resolve_encryption_key's
+    docstring for why. This is a deliberate tradeoff (re-auth on every
+    sync click) accepted because server.py binds 0.0.0.0 by default for
+    LAN/phone access, and an already-cached key would let anyone on the
+    same network trigger a real sync without ever proving they know the
+    passphrase or TOTP.
+    """
+    from src.sync import SyncWorker
+
+    body = request.get_json(silent=True) or {}
+    passphrase = body.get("passphrase")
+    totp_code = body.get("totp_code")
+    direction = body.get("direction", "bidirectional")
+
+    if not passphrase or not totp_code:
+        return jsonify({"error": "passphrase and totp_code are required"}), 400
+    if direction not in ("pull", "push", "bidirectional"):
+        return jsonify({"error": "direction must be 'pull', 'push', or 'bidirectional'"}), 400
+
+    try:
+        encryption_key = crypto.resolve_encryption_key(passphrase, totp_code)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+
+    try:
+        worker = SyncWorker(encryption_key)
+        # Mirror cli.py's sync command: pull_from_github()/push_to_github()
+        # already return a flat {direction, files_changed, conflicts,
+        # [reindexed]} dict for single-direction syncs. worker.sync() only
+        # needs calling (and its nested {"pull":..., "push":..., "reindexed":
+        # N} shape only needs flattening) for the bidirectional case -
+        # calling worker.sync() unconditionally here previously left
+        # result["files_changed"] undefined for every direction, since that
+        # key only exists on the un-nested pull/push dicts, not on sync()'s
+        # wrapper.
+        if direction == "pull":
+            result = worker.pull_from_github()
+        elif direction == "push":
+            result = worker.push_to_github()
+            result.setdefault("reindexed", 0)
+        else:
+            raw = worker.sync(direction="bidirectional")
+            pull_result = raw.get("pull") or {}
+            push_result = raw.get("push") or {}
+            result = {
+                "direction": "bidirectional",
+                "files_changed": pull_result.get("files_changed", 0) + push_result.get("files_changed", 0),
+                "conflicts": pull_result.get("conflicts", 0) + push_result.get("conflicts", 0),
+                "reindexed": raw.get("reindexed", 0),
+            }
+    except Exception as e:
+        return jsonify({"error": f"Sync failed: {e}"}), 500
+
+    return jsonify(result)
+
+
+@app.route("/import", methods=["POST"])
+def import_endpoint():
+    """POST /import {sessions: [...]}
+
+    Accepts one or more already-exported Claude.ai session JSON objects
+    (the same shape produced by Settings -> Export data, one conversation
+    per object) and writes each to the raw_exports/claude-ai folder that
+    collect_from_claude_ai() already watches — letting the web UI replace
+    manually placing files in ~/.claude-search-library/data/raw_exports/claude-ai/
+    with a drag-and-drop upload. Does not run collection itself; the next
+    `cli.py collect` (manual or --watch) picks these up same as always.
+    """
+    import json
+    import uuid
+
+    body = request.get_json(silent=True) or {}
+    sessions = body.get("sessions")
+    if not sessions or not isinstance(sessions, list):
+        return jsonify({"error": "'sessions' must be a non-empty list of export objects"}), 400
+
+    export_dir = RAW_EXPORTS_CLAUDE_AI_DIR
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    written = []
+    for session_obj in sessions:
+        if not isinstance(session_obj, dict):
+            return jsonify({"error": "each item in 'sessions' must be a JSON object"}), 400
+        filename = f"import-{uuid.uuid4().hex}.json"
+        (export_dir / filename).write_text(json.dumps(session_obj), encoding="utf-8")
+        written.append(filename)
+
+    return jsonify({"imported": len(written), "files": written})
 
 
 @app.route("/devices", methods=["GET"])

@@ -173,6 +173,54 @@ def test_join_device_existing_setup_wrong_passphrase_fails(monkeypatch):
         crypto.join_device_existing_setup()
 
 
+def test_resolve_encryption_key_matches_join_device_flow(monkeypatch):
+    """server.py's /sync must derive the exact same key join-device would."""
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+
+    code = pyotp.TOTP(fixed_secret).now()
+    key = crypto.resolve_encryption_key(passphrase, code)
+
+    assert key == crypto.derive_encryption_key(passphrase, fixed_secret)
+
+
+def test_resolve_encryption_key_wrong_passphrase_raises(monkeypatch):
+    fixed_secret = pyotp.random_base32()
+    correct_key = crypto._derive_passphrase_only_key("correct-passphrase")
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), correct_key)
+
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+
+    with pytest.raises(ValueError):
+        crypto.resolve_encryption_key("wrong-passphrase", "123456")
+
+
+def test_resolve_encryption_key_wrong_totp_raises(monkeypatch):
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+
+    with pytest.raises(ValueError):
+        crypto.resolve_encryption_key(passphrase, "000000")
+
+
+def test_resolve_encryption_key_unreachable_github_raises(monkeypatch):
+    def raise_unreachable():
+        raise RuntimeError("No git repository at that path")
+
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", raise_unreachable)
+
+    with pytest.raises(ValueError):
+        crypto.resolve_encryption_key("any-passphrase", "123456")
+
+
 def test_join_device_existing_setup_rejects_bad_totp(monkeypatch):
     fixed_secret = pyotp.random_base32()
     passphrase = "test-passphrase"

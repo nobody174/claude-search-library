@@ -88,9 +88,50 @@ async function approveReview(sessionId, approved, notes = "") {
   });
 }
 
+/** Fetch archive integrity status (healthy/unhealthy + stats). Check before syncing. */
+async function getHealth() {
+  return request("/health");
+}
+
+/**
+ * Trigger a push/pull/bidirectional sync.
+ *
+ * Passphrase + TOTP code are required on every call - the server never
+ * caches the derived encryption key between requests (see server.py's
+ * /sync docstring for why: it binds 0.0.0.0 for LAN/phone access, so a
+ * cached key would let anyone on the same network trigger a sync without
+ * ever proving they know the passphrase or a live TOTP code).
+ *
+ * Returns {direction, files_changed, conflicts, reindexed}.
+ */
+async function sync(passphrase, totpCode, direction = "bidirectional") {
+  return request("/sync", {
+    method: "POST",
+    body: JSON.stringify({ passphrase, totp_code: totpCode, direction }),
+  });
+}
+
+/**
+ * Import one or more already-exported Claude.ai conversation JSON objects
+ * (the shape produced by Settings -> Export data) without the user
+ * manually placing files in raw_exports/claude-ai/. Does not trigger
+ * collection itself - the next `cli.py collect` picks these up.
+ *
+ * Returns {imported: number, files: string[]}.
+ */
+async function importSessions(sessions) {
+  return request("/import", {
+    method: "POST",
+    body: JSON.stringify({ sessions }),
+  });
+}
+
 // Exposed as a global for the CDN-based React app (public/index.html) and
 // as CommonJS exports for anything that runs under Node/Jest.
-const api = { setup, search, getSession, getStats, getDevices, approveReview };
+const api = {
+  setup, search, getSession, getStats, getDevices, approveReview,
+  getHealth, sync, importSessions,
+};
 
 if (typeof window !== "undefined") {
   window.ClaudeSearchAPI = api;

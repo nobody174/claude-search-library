@@ -27,6 +27,18 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+def test_index_page_serves_web_ui(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"Claude Search Library" in resp.data
+
+
+def test_src_assets_serves_api_js(client):
+    resp = client.get("/src/api.js")
+    assert resp.status_code == 200
+    assert b"ClaudeSearchAPI" in resp.data
+
+
 def test_search_endpoint_missing_query_returns_400(client):
     resp = client.get("/search")
     assert resp.status_code == 400
@@ -262,3 +274,192 @@ def test_setup_endpoint_wrong_totp_returns_401(client, monkeypatch):
     )
     assert resp.status_code == 401
     assert resp.get_json()["success"] is False
+
+
+def test_sync_endpoint_requires_passphrase_and_code(client):
+    resp = client.post("/sync", data=json.dumps({}), content_type="application/json")
+    assert resp.status_code == 400
+
+
+def test_sync_endpoint_rejects_bad_direction(client):
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "p", "totp_code": "123456", "direction": "sideways"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_sync_endpoint_invalid_credentials_returns_401(client, monkeypatch):
+    def raise_invalid(passphrase, totp_code):
+        raise ValueError("Invalid passphrase")
+
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", raise_invalid)
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "wrong", "totp_code": "000000"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 401
+    assert "error" in resp.get_json()
+
+
+class _FakeSyncWorker:
+    """Mirrors the REAL shapes SyncWorker's methods return - not a
+    hand-picked flat dict. This matters: pull_from_github()/
+    push_to_github() each return a flat {direction, files_changed,
+    conflicts, [reindexed]} dict, but sync() wraps both into
+    {"pull": ..., "push": ..., "reindexed": N} - a fake that returned
+    the flat shape from a mocked .sync() previously let
+    result["files_changed"] being undefined in production go undetected,
+    since the real sync()'s output never has that key at the top level.
+    """
+
+    instances = []
+
+    def __init__(self, encryption_key):
+        self.encryption_key = encryption_key
+        self.calls = []
+        _FakeSyncWorker.instances.append(self)
+
+    def pull_from_github(self):
+        self.calls.append("pull")
+        return {"direction": "pull", "files_changed": 3, "conflicts": 0, "reindexed": 2}
+
+    def push_to_github(self):
+        self.calls.append("push")
+        return {"direction": "push", "files_changed": 2, "conflicts": 0}
+
+    def sync(self, direction="bidirectional"):
+        self.calls.append(f"sync:{direction}")
+        return {
+            "pull": {"direction": "pull", "files_changed": 3, "conflicts": 0, "reindexed": 2},
+            "push": {"direction": "push", "files_changed": 2, "conflicts": 0},
+            "reindexed": 2,
+        }
+
+
+def test_sync_endpoint_success_defaults_to_bidirectional(client, monkeypatch):
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
+    _FakeSyncWorker.instances = []
+    monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    # Flattened from the nested pull+push sync() result: 3 + 2 files changed.
+    assert data["files_changed"] == 5
+    assert data["conflicts"] == 0
+    assert data["reindexed"] == 2
+    assert _FakeSyncWorker.instances[0].calls == ["sync:bidirectional"]
+    # The key server.py derived must never leak back into the response.
+    assert "encryption_key" not in data
+
+
+def test_sync_endpoint_pull_only_uses_flat_pull_result(client, monkeypatch):
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
+    _FakeSyncWorker.instances = []
+    monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456", "direction": "pull"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["files_changed"] == 3
+    assert data["reindexed"] == 2
+    assert _FakeSyncWorker.instances[0].calls == ["pull"]
+
+
+def test_sync_endpoint_push_only_uses_flat_push_result(client, monkeypatch):
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
+    _FakeSyncWorker.instances = []
+    monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456", "direction": "push"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["files_changed"] == 2
+    # push_to_github() never returns a "reindexed" key - endpoint must default it.
+    assert data["reindexed"] == 0
+    assert _FakeSyncWorker.instances[0].calls == ["push"]
+
+
+def test_sync_endpoint_sync_failure_returns_500(client, monkeypatch):
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
+
+    class FailingSyncWorker:
+        def __init__(self, encryption_key):
+            pass
+
+        def pull_from_github(self):
+            raise RuntimeError("no git repository at that path")
+
+    monkeypatch.setattr("src.sync.SyncWorker", FailingSyncWorker)
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456", "direction": "pull"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 500
+    assert "error" in resp.get_json()
+
+
+@pytest.fixture
+def import_dir(tmp_path, monkeypatch):
+    """Isolate /import's writes from the real ~/.claude-search-library archive."""
+    target = tmp_path / "raw_exports" / "claude-ai"
+    monkeypatch.setattr("server.RAW_EXPORTS_CLAUDE_AI_DIR", target)
+    return target
+
+
+def test_import_endpoint_requires_sessions_list(client, import_dir):
+    resp = client.post("/import", data=json.dumps({}), content_type="application/json")
+    assert resp.status_code == 400
+
+
+def test_import_endpoint_rejects_non_list(client, import_dir):
+    resp = client.post(
+        "/import",
+        data=json.dumps({"sessions": {"not": "a list"}}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_import_endpoint_rejects_non_object_items(client, import_dir):
+    resp = client.post(
+        "/import",
+        data=json.dumps({"sessions": ["just a string"]}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_import_endpoint_writes_files_to_claude_ai_export_dir(client, import_dir):
+    resp = client.post(
+        "/import",
+        data=json.dumps({"sessions": [{"title": "chat one"}, {"title": "chat two"}]}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["imported"] == 2
+    assert len(data["files"]) == 2
+
+    written = list(import_dir.glob("*.json"))
+    assert len(written) == 2
+    contents = [json.loads(f.read_text(encoding="utf-8"))["title"] for f in written]
+    assert sorted(contents) == ["chat one", "chat two"]

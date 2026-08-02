@@ -21,7 +21,13 @@
 
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useCallback, useRef } = React;
-    const api = window.ClaudeSearchAPI;
+    // Named apiClient, not api - src/api.js's own top-level `const api = {...}`
+    // shares this same global lexical scope (separate <script> tags don't
+    // sandbox let/const/class declarations from each other in browsers), so
+    // reusing the name `api` here throws "Identifier 'api' has already been
+    // declared" the instant this script parses. Found via an actual browser
+    // load - this went undetected until server.py finally served this page.
+    const apiClient = window.ClaudeSearchAPI;
 
     const LOCAL_STORAGE_KEY = "claude-search-library:unlocked";
 
@@ -49,7 +55,7 @@
               className={`px-3 py-2 rounded text-sm ${view === "devices" ? "bg-gray-900 text-white" : "bg-gray-100"}`}
               onClick={() => onNavigate("devices")}
             >
-              Devices
+              Sync
             </button>
             <button className="px-3 py-2 rounded text-sm bg-gray-100" onClick={onLock}>
               Lock
@@ -70,7 +76,7 @@
         setError(null);
         setLoading(true);
         try {
-          const result = await api.setup(passphrase, totpCode);
+          const result = await apiClient.setup(passphrase, totpCode);
           if (result.success) {
             // Only a "device verified" flag is persisted locally - never the
             // passphrase or any derived key. Re-entering the passphrase per
@@ -132,6 +138,124 @@
             >
               {loading ? "Verifying…" : "Setup Device"}
             </button>
+          </form>
+        </div>
+      );
+    }
+
+    // sessionStorage, not localStorage: cleared when the tab/browser closes,
+    // never written to disk long-term. Holds the passphrase only - never a
+    // TOTP code (those are ~30s one-time codes, caching one is pointless)
+    // and never the derived encryption key itself (server.py still derives
+    // that fresh per /sync call - see resolve_encryption_key's docstring).
+    // This narrows re-auth friction to "one fresh TOTP code per sync" instead
+    // of "passphrase + TOTP every time", while keeping the actual security
+    // property (a live TOTP proof still required every call) intact.
+    const SESSION_PASSPHRASE_KEY = "claude-search-library:session-passphrase";
+
+    function CredentialModal({ title, actionLabel, onSubmit, onClose }) {
+      const [passphrase, setPassphrase] = useState(
+        () => window.sessionStorage.getItem(SESSION_PASSPHRASE_KEY) || ""
+      );
+      const [rememberedPassphrase] = useState(() => Boolean(window.sessionStorage.getItem(SESSION_PASSPHRASE_KEY)));
+      const [totpCode, setTotpCode] = useState("");
+      const [submitting, setSubmitting] = useState(false);
+      const [error, setError] = useState(null);
+
+      const forgetPassphrase = () => {
+        window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
+        setPassphrase("");
+      };
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError(null);
+        setSubmitting(true);
+        try {
+          await onSubmit(passphrase, totpCode);
+          // Only cache on success - an unconfirmed passphrase has no
+          // business being remembered, even for one tab session.
+          window.sessionStorage.setItem(SESSION_PASSPHRASE_KEY, passphrase);
+        } catch (err) {
+          // resolve_encryption_key() deliberately never says which factor
+          // was wrong (see crypto.py), so on any failure the safest default
+          // is to drop the cached passphrase and ask for both fields again,
+          // rather than silently retrying a possibly-wrong cached value.
+          window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
+          setError(err.message);
+          setSubmitting(false);
+          return;
+        }
+        setSubmitting(false);
+      };
+
+      return (
+        <div className="modal-overlay fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4">
+          <form onSubmit={handleSubmit} className="modal bg-white rounded-lg shadow w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">{title}</h2>
+              <button type="button" className="text-gray-400 text-2xl leading-none" onClick={onClose} aria-label="Close">
+                &times;
+              </button>
+            </div>
+            <p className="text-sm text-gray-500">
+              {rememberedPassphrase
+                ? "Using this browser tab's remembered passphrase — a fresh authenticator code is still required every time."
+                : "Required every time — nothing is cached between requests. See ROADMAP.md #7 for why."}
+            </p>
+            {rememberedPassphrase ? (
+              <p className="text-xs text-gray-500">
+                <button type="button" className="text-blue-600 hover:underline" onClick={forgetPassphrase}>
+                  Use a different passphrase
+                </button>
+              </p>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium mb-1" htmlFor="sync-passphrase">
+                  Master passphrase
+                </label>
+                <input
+                  id="sync-passphrase"
+                  type="password"
+                  autoComplete="off"
+                  className="w-full border border-gray-300 rounded px-3 py-2"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium mb-1" htmlFor="sync-totp">
+                Authenticator code
+              </label>
+              <input
+                id="sync-totp"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                className="w-full border border-gray-300 rounded px-3 py-2 tracking-widest text-center"
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                required
+                autoFocus={rememberedPassphrase}
+              />
+            </div>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <div className="flex gap-2 justify-end">
+              <button type="button" className="px-4 py-2 rounded text-sm bg-gray-100" onClick={onClose}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-4 py-2 rounded text-sm bg-gray-900 text-white disabled:opacity-50"
+              >
+                {submitting ? "Working…" : actionLabel}
+              </button>
+            </div>
           </form>
         </div>
       );
@@ -235,7 +359,7 @@
 
       useEffect(() => {
         let cancelled = false;
-        api
+        apiClient
           .getSession(sessionId)
           .then((data) => !cancelled && setDetail(data))
           .catch((err) => !cancelled && setError(err.message));
@@ -345,7 +469,7 @@
         let cancelled = false;
         setLoading(true);
         setError(null);
-        api
+        apiClient
           .search(debouncedQuery, { top_k: 20, mode, filters: buildApiFilters(filters) })
           .then((data) => !cancelled && setResults(data))
           .catch((err) => !cancelled && setError(err.message))
@@ -417,18 +541,115 @@
       }
     }
 
+    function HealthBadge({ health }) {
+      if (!health) return null;
+      const healthy = health.healthy;
+      return (
+        <span
+          className={`text-xs rounded-full px-2 py-1 font-medium ${
+            healthy ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+          }`}
+        >
+          {healthy ? "Healthy" : "Unhealthy"}
+        </span>
+      );
+    }
+
+    function ImportDropzone({ onImported }) {
+      const [dragging, setDragging] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [message, setMessage] = useState(null);
+      const fileInputRef = useRef(null);
+
+      // A Claude.ai export file may be a single conversation object or an
+      // array of many (the real "Export data" zip's conversations.json is
+      // an array) - either shape flattens to a list of individual session
+      // objects, matching what collect_from_claude_ai() expects one-per-file.
+      const flattenToSessions = (parsed) => (Array.isArray(parsed) ? parsed : [parsed]);
+
+      const handleFiles = async (fileList) => {
+        setBusy(true);
+        setMessage(null);
+        try {
+          const files = Array.from(fileList).filter((f) => f.name.endsWith(".json"));
+          if (files.length === 0) {
+            throw new Error("No .json files found in the drop");
+          }
+          const texts = await Promise.all(files.map((f) => f.text()));
+          const sessions = texts.flatMap((text, i) => {
+            try {
+              return flattenToSessions(JSON.parse(text));
+            } catch (e) {
+              throw new Error(`${files[i].name} is not valid JSON`);
+            }
+          });
+          const result = await apiClient.importSessions(sessions);
+          setMessage(`Imported ${result.imported} session(s). Run "cli.py collect" to process them.`);
+          onImported();
+        } catch (err) {
+          setMessage(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      return (
+        <div
+          className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+            dragging ? "border-gray-900 bg-gray-50" : "border-gray-300"
+          }`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            handleFiles(e.dataTransfer.files);
+          }}
+        >
+          <p className="text-sm text-gray-500">
+            Drop Claude.ai export JSON here, or{" "}
+            <button
+              type="button"
+              className="text-blue-600 hover:underline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy}
+            >
+              browse
+            </button>
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            multiple
+            className="hidden"
+            onChange={(e) => e.target.files.length > 0 && handleFiles(e.target.files)}
+          />
+          {busy && <p className="text-xs text-gray-400 mt-2">Importing…</p>}
+          {message && <p className="text-xs text-gray-600 mt-2">{message}</p>}
+        </div>
+      );
+    }
+
     function DevicesPage() {
       const [devices, setDevices] = useState([]);
       const [stats, setStats] = useState(null);
-      const [syncing, setSyncing] = useState(false);
+      const [health, setHealth] = useState(null);
       const [error, setError] = useState(null);
+      const [refreshing, setRefreshing] = useState(false);
+      const [activeModal, setActiveModal] = useState(null); // "push" | "pull" | "bidirectional" | null
+      const [syncMessage, setSyncMessage] = useState(null);
 
       const load = useCallback(() => {
         setError(null);
-        Promise.all([api.getDevices(), api.getStats()])
-          .then(([d, s]) => {
+        Promise.all([apiClient.getDevices(), apiClient.getStats(), apiClient.getHealth().catch(() => null)])
+          .then(([d, s, h]) => {
             setDevices(d);
             setStats(s);
+            setHealth(h);
           })
           .catch((err) => setError(err.message));
       }, []);
@@ -437,32 +658,63 @@
         load();
       }, [load]);
 
-      const handleManualSync = async () => {
-        setSyncing(true);
+      const handleRefresh = async () => {
+        setRefreshing(true);
         try {
-          // There is no dedicated sync endpoint on the REST API (sync runs
-          // as a daemon / CLI command per Task 7) - this button just
-          // refreshes the device/stats view to show the latest known state.
           load();
         } finally {
-          setSyncing(false);
+          setRefreshing(false);
         }
       };
 
+      const handleSyncSubmit = async (passphrase, totpCode) => {
+        const direction = activeModal;
+        const result = await apiClient.sync(passphrase, totpCode, direction);
+        setSyncMessage(
+          `${direction}: ${result.files_changed} file(s) changed, ${result.reindexed || 0} reindexed` +
+            (result.conflicts ? `, ${result.conflicts} conflict(s)` : "")
+        );
+        setActiveModal(null);
+        load();
+      };
+
+      const syncButtons = [
+        { direction: "pull", label: "Pull" },
+        { direction: "push", label: "Push" },
+        { direction: "bidirectional", label: "Sync Now" },
+      ];
+
       return (
         <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-          <div className="device-status bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Last sync</p>
-              <p className="font-medium">{stats?.last_sync || "Never"}</p>
+          <div className="device-status bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Last sync</p>
+                <p className="font-medium">{stats?.last_sync || "Never"}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <HealthBadge health={health} />
+                <button
+                  className="bg-gray-100 rounded px-3 py-2 text-sm disabled:opacity-50"
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                >
+                  {refreshing ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
             </div>
-            <button
-              className="bg-gray-900 text-white rounded px-4 py-2 text-sm disabled:opacity-50"
-              onClick={handleManualSync}
-              disabled={syncing}
-            >
-              {syncing ? "Refreshing…" : "Refresh"}
-            </button>
+            <div className="flex gap-2">
+              {syncButtons.map((b) => (
+                <button
+                  key={b.direction}
+                  className="flex-1 bg-gray-900 text-white rounded px-3 py-2 text-sm"
+                  onClick={() => setActiveModal(b.direction)}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+            {syncMessage && <p className="text-xs text-gray-600">{syncMessage}</p>}
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -485,6 +737,20 @@
               <p className="text-sm text-gray-400">No devices have synced yet.</p>
             )}
           </div>
+
+          <div>
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Import Claude.ai export</h3>
+            <ImportDropzone onImported={load} />
+          </div>
+
+          {activeModal && (
+            <CredentialModal
+              title={`Confirm ${activeModal}`}
+              actionLabel={syncButtons.find((b) => b.direction === activeModal).label}
+              onSubmit={handleSyncSubmit}
+              onClose={() => setActiveModal(null)}
+            />
+          )}
         </div>
       );
     }
@@ -497,6 +763,7 @@
 
       const handleLock = () => {
         window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+        window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
         setUnlocked(false);
       };
 
