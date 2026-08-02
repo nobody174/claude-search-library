@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src import crypto, sync
+from src import crypto, embedder, sync
 from src.storage import Storage
 
 
@@ -12,6 +12,25 @@ def redirect_log(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "LOG_PATH", tmp_path / "sync.log")
     sync.logger.handlers.clear()
     monkeypatch.setattr(sync, "_device_id", lambda: "test-device")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def isolated_chroma(tmp_path, monkeypatch):
+    """Prevent unmocked reindex_all() calls (triggered by real
+    pull_from_github() runs in this file) from falling through to
+    embedder.DEFAULT_CHROMA_PATH — the real, persistent user archive.
+
+    SyncWorker defaults chroma_path=None, and reindex_all(chroma_path=None)
+    resolves to DEFAULT_CHROMA_PATH; without this, any test that exercises
+    pull_from_github()'s reindex step for real (rather than monkeypatching
+    src.embedder.reindex_all) silently wipes and repopulates the user's
+    actual ChromaDB collection with test fixture sessions.
+    """
+    monkeypatch.setattr(embedder, "_client", None)
+    monkeypatch.setattr(embedder, "_collection", None)
+    monkeypatch.setattr(embedder, "_client_path", None)
+    monkeypatch.setattr(embedder, "DEFAULT_CHROMA_PATH", tmp_path / "chromadb")
     yield
 
 
