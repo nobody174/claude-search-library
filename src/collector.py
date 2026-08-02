@@ -174,6 +174,117 @@ def collect_from_cowork(cowork_path: Optional[str] = None) -> list[dict]:
     return sessions
 
 
+def _extract_text_content(content) -> str:
+    """Flatten a Claude Code message's content into plain text.
+
+    Claude Code transcript entries carry a list of typed blocks (text,
+    thinking, tool_use, tool_result, ...); only text blocks are
+    user-readable narrative, so tool/thinking blocks are dropped here
+    rather than summarized.
+    """
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text", "")
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def _convert_claude_code_transcript(jsonl_path: Path) -> Optional[dict]:
+    """Convert one ~/.claude/projects/*/*.jsonl transcript into the same
+    raw export shape normalize_session() expects from a claude.ai export
+    (id/title/created_at/messages), skipping non-conversational lines
+    (queue-operations, file-history snapshots, etc.) and turns with no
+    text content (pure tool-use/thinking turns)."""
+    session_id = None
+    title = None
+    messages = []
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            entry_type = entry.get("type")
+            if entry_type == "ai-title":
+                title = entry.get("aiTitle")
+                continue
+            if entry_type not in ("user", "assistant"):
+                continue
+
+            message = entry.get("message") or {}
+            role = message.get("role")
+            text = _extract_text_content(message.get("content"))
+            if not role or not text.strip():
+                continue
+
+            session_id = entry.get("sessionId") or session_id
+            messages.append({"role": role, "content": text, "timestamp": entry.get("timestamp")})
+
+    if not messages or not session_id:
+        return None
+
+    return {
+        "id": session_id,
+        "title": title or "Claude Code session",
+        "created_at": messages[0]["timestamp"],
+        "updated_at": messages[-1]["timestamp"],
+        "messages": messages,
+    }
+
+
+def collect_from_claude_code(projects_path: Optional[str] = None) -> list[dict]:
+    """Collect sessions from Claude Code's local transcript store
+    (~/.claude/projects/<project>/<session_id>.jsonl).
+
+    Each transcript is converted to the standard raw-export JSON shape
+    and materialized under raw_exports/claude-code/ so it participates
+    in the same on-disk-hash/dedup/export flow as every other source.
+    """
+    if projects_path is None:
+        projects_path = str(Path.home() / ".claude" / "projects")
+
+    root = Path(projects_path)
+    sessions = []
+    if not root.exists():
+        return sessions
+
+    export_dir = Path.home() / ".claude-search-library" / "data" / "raw_exports" / "claude-code"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    for jsonl_path in root.glob("*/*.jsonl"):
+        try:
+            raw = _convert_claude_code_transcript(jsonl_path)
+        except OSError as e:
+            logger.warning("Failed to read %s: %s", jsonl_path, e)
+            continue
+        if raw is None:
+            continue
+
+        out_path = export_dir / f"{raw['id']}.json"
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(raw, f)
+        except OSError as e:
+            logger.warning("Failed to write converted transcript %s: %s", out_path, e)
+            continue
+
+        try:
+            sessions.append(normalize_session(raw, "claude-code", detect_device(), str(out_path)))
+        except Exception as e:
+            logger.warning("Failed to normalize %s: %s", jsonl_path, e)
+
+    return sessions
+
+
 def collect_from_local(folder_path: str) -> list[dict]:
     """Import any JSON files sitting in a local watch folder."""
     folder = Path(folder_path)

@@ -22,7 +22,7 @@ from src import collector
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ("claude-ai", "vscode", "cowork", "local")
+SOURCES = ("claude-ai", "vscode", "claude-code", "cowork", "local")
 
 
 class CollectionError(RuntimeError):
@@ -41,6 +41,7 @@ def _collector_and_arg(source: str, folders: dict):
     return {
         "claude-ai": (collector.collect_from_claude_ai, folders.get("claude-ai")),
         "vscode": (collector.collect_from_vscode, folders.get("vscode")),
+        "claude-code": (collector.collect_from_claude_code, folders.get("claude-code")),
         "cowork": (collector.collect_from_cowork, folders.get("cowork")),
         "local": (collector.collect_from_local, folders.get("local")),
     }[source]
@@ -52,6 +53,7 @@ def run_collection(
     db_path: Optional[str] = None,
     claude_ai_folder: Optional[str] = None,
     vscode_extensions_path: Optional[str] = None,
+    claude_code_projects_path: Optional[str] = None,
     cowork_path: Optional[str] = None,
     local_folder: Optional[str] = None,
 ) -> dict:
@@ -76,6 +78,7 @@ def run_collection(
     folders = {
         "claude-ai": claude_ai_folder or defaults["claude-ai"],
         "vscode": vscode_extensions_path,
+        "claude-code": claude_code_projects_path,
         "cowork": cowork_path,
         "local": local_folder or defaults["local"],
     }

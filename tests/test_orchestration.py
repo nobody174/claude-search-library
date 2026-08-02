@@ -60,6 +60,7 @@ def test_fail_fast_false_continues_past_errors(monkeypatch, export_folder, tmp_p
 
     monkeypatch.setattr(collector, "collect_from_claude_ai", lambda folder: original_claude_ai(folder))
     monkeypatch.setattr(collector, "collect_from_vscode", lambda path: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(collector, "collect_from_claude_code", lambda path: [])
     monkeypatch.setattr(collector, "collect_from_cowork", lambda path: [])
     monkeypatch.setattr(collector, "collect_from_local", lambda path: [])
 
@@ -78,6 +79,7 @@ def test_fail_fast_true_raises_immediately(monkeypatch, export_folder, tmp_path)
 
     monkeypatch.setattr(collector, "collect_from_claude_ai", lambda folder: original_claude_ai(folder))
     monkeypatch.setattr(collector, "collect_from_vscode", lambda path: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(collector, "collect_from_claude_code", lambda path: [])
     monkeypatch.setattr(collector, "collect_from_cowork", lambda path: [])
     monkeypatch.setattr(collector, "collect_from_local", lambda path: [])
 
