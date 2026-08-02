@@ -428,6 +428,42 @@ See `SPEC.md` → "Troubleshooting" for more issues.
 
 ---
 
+## Session log (2026-08-02)
+
+- **ROADMAP.md #6/#7 shipped:** join-device GUI popup fix (the passphrase
+  step never actually used the popup at all — fixed), `/sync` + `/import`
+  REST endpoints, full web UI sync dashboard (health badge, Pull/Push/Sync
+  Now buttons, drag-and-drop Claude.ai export import). Passphrase is now
+  remembered per browser tab via sessionStorage after a successful sync —
+  a fresh TOTP code is still required every time. Commits `6a870fc`,
+  `062d44d`, `59e1333` on `origin/main`.
+- **Real bugs found and fixed along the way, not just planned features:**
+  a `test_sync.py` test was silently wiping the real production ChromaDB
+  with fixture data on every test run (fixed with an isolation fixture
+  mirroring `test_embedder.py`'s); `index.html` and `src/api.js` both
+  declared a top-level `const api`, which collide the instant the page is
+  actually served by a browser — this went undetected until this session
+  added the `GET /` route that finally served the page at all; `/sync`'s
+  response shape was wrong for every direction (`files_changed` came back
+  `undefined`) because it called the wrapped `worker.sync()` instead of
+  mirroring `cli.py`'s flat per-direction calls.
+- **Cost decision:** `src/processor.py`'s summarization model switched
+  from `claude-opus-5` to `claude-haiku-4-5`. Push/pull/search involve
+  zero model calls ever (pure git/crypto/local-embedding) — summarizing
+  *new* sessions via `process` is the only real API cost anywhere in this
+  pipeline. Worst case (a 16K-token session) is ~$0.026, roughly a
+  quarter of a Norwegian krone.
+- **ROADMAP #8 (iOS chat capture) is explicitly UNSOLVED** — re-read that
+  roadmap entry before attempting a fix. Official export is desktop/web
+  only; unofficial claude.ai scrapers exist but violate Anthropic's ToS
+  (real account-suspension risk, confirmed via dedicated research, not
+  assumed); no iOS Share Sheet export hook exists either.
+- **Next up, per the user:** continuing through ROADMAP.md, in
+  system-completeness order — UI/visual polish is explicitly deferred
+  until the underlying system itself is fully working.
+
+---
+
 ## Contact & Support
 
 - **GitHub**: https://github.com/nobody174/claude-search-library
@@ -436,6 +472,6 @@ See `SPEC.md` → "Troubleshooting" for more issues.
 
 ---
 
-**Last Updated**: July 31, 2026
+**Last Updated**: August 2, 2026
 **Author**: Vartdal (nobody174)
 **License**: MIT
