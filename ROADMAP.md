@@ -20,10 +20,20 @@ Features to implement after public launch:
 - File: src/export.py
 - CLI: python3 cli.py export SESSION_ID --format markdown
 
-## 4. Web Chat Import (MEDIUM)
-- Import from claude.ai via private API (if available)
-- Automated daily sync
-- File: src/collectors/claude_web.py
+## 4. Web Chat Import (MEDIUM) — DONE, rewritten for ToS safety 2026-08-02
+- Original plan ("import via claude.ai private API") was rejected: it's
+  the same unofficial-scraper approach ruled out in #8's research —
+  Anthropic's Consumer Terms ban automated/non-human access to claude.ai,
+  confirmed via dedicated research, real account-suspension risk.
+- Built instead: `src/claude_export_import.py` converts the ZIP/JSON a
+  user downloads through claude.ai's own Settings -> Export Data feature
+  (the only sanctioned path, same one #8 confirmed is desktop/web-only)
+  into the per-session raw-export JSON `collect_from_claude_ai()` already
+  watches. Never talks to claude.ai's API — only reads a file the user
+  already has on disk.
+- CLI: `python3 cli.py import-export PATH [--run-collect]`
+- No automated daily sync — the official export is a manual download,
+  so there's nothing to poll.
 
 ## 5. Retention/Pruning (LOW)
 - Delete old sessions (>1 year)

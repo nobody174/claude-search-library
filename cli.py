@@ -102,6 +102,27 @@ def collect(watch: bool, dry_run: bool, sources: tuple, fail_fast: bool) -> None
         click.echo(json.dumps(result, indent=2))
 
 
+@cli.command(name="import-export")
+@click.argument("export_path", type=click.Path(exists=True))
+@click.option(
+    "--run-collect", is_flag=True,
+    help="Run `collect --source claude-ai` immediately after converting.",
+)
+def import_export(export_path: str, run_collect: bool) -> None:
+    """Import a claude.ai Data Export (Settings -> Export data ZIP or its
+    conversations.json), converting it for the next `collect` to pick up."""
+    from src.claude_export_import import import_official_export
+
+    result = import_official_export(export_path)
+    click.echo(json.dumps(result, indent=2))
+
+    if run_collect:
+        from src.orchestration import run_collection
+
+        collect_result = run_collection(sources=["claude-ai"])
+        click.echo(json.dumps(collect_result, indent=2))
+
+
 @cli.command()
 @click.option("--batch-size", default=10, show_default=True, help="Sessions per batch")
 @click.option("--watch", is_flag=True, help="Run processing continuously")
