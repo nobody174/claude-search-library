@@ -41,6 +41,78 @@ Features to implement after public launch:
 - File: src/maintenance.py
 - CLI: python3 cli.py prune --older-than 365 --dry-run
 
+## 9. Claude desktop app / claude.ai chat capture — UNSOLVED, actively being researched (HIGH)
+- Problem: the user has "a lot of" real conversations in the Claude
+  desktop app (claude.ai account) that are NOT in the library. Only
+  Claude Code CLI sessions are collected automatically today. The user
+  explicitly does not want a manual export→zip→email→unzip→import
+  workflow as an ongoing habit (roadmap #4's importer exists for a
+  one-time/occasional catch-up, but that's not automatic capture).
+- Investigated (2026-08-03, via background research agent) whether the
+  desktop app's own local cache could be read directly — same category
+  of solution as roadmap #4's local-file approach for Claude Code, NOT
+  the ToS-violating claude.ai-private-API-scraping path ruled out in #8.
+  This is a fundamentally different, legitimate approach: reading a
+  local cache file an app *the user runs* wrote to *their own disk*.
+- **Findings so far:**
+  - The desktop app is MSIX/Microsoft-Store-packaged; its Electron
+    userData lives at
+    `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\`
+    (not the usual `%APPDATA%\Claude` — virtualized by the MSIX sandbox).
+  - It caches data locally via Chromium's IndexedDB, backed by LevelDB,
+    at `IndexedDB\https_claude.ai_0.indexeddb.leveldb\` (+ a sibling
+    `.indexeddb.blob` dir for large/overflow values).
+  - The app is currently running while the app is open, so the LevelDB
+    store must be **copied to a temp location before reading** (LevelDB
+    holds a single-writer lock) — never open or write to the live store.
+  - Confirmed there IS real conversation-related data present: a large
+    (~715KB) `react-query-cache` entry spilled to the `.indexeddb.blob`
+    overflow directory decodes (partially) to real account data
+    (matching email/org info) and appears to be a persisted cache of the
+    conversation list/detail react-query state.
+  - **The actual blocker**: reading the *populated* content requires
+    parsing Chromium's internal V8 "serialized script value" binary
+    format (used for all IndexedDB values), which is not JSON. Two
+    Python libraries were tried:
+    - `chromium-reader` (pure-Python, pip) — has a real bug in its key
+      classification code, reports zero databases. Not usable.
+    - `ccl_chromium_reader` (the actual CCL Forensics library — install
+      via `pip install git+https://github.com/obsidianforensics/ccl_chrome_indexeddb.git`,
+      NOT the nonexistent PyPI names `ccl_chrome_indexeddb`/
+      `ccl-chromium-reader`) — correctly resolves databases/object
+      stores, but its V8 `Deserializer` throws `Unknown tag` errors
+      partway through this specific blob's nested sparse/dense JS-array
+      structures. Patching around the error causes byte-stream desync,
+      producing corrupted output (e.g. `queries: [{}, null, null, ...]`)
+      rather than real recovered data — worse than no collector, so no
+      collector was shipped rather than fabricate a working one.
+  - Only 2 IndexedDB databases exist for the claude.ai origin:
+    `keyval-store` (drafts/pin-state only, not transcripts) and
+    `claude-device-binding` (empty, auth-related). Not exhaustively
+    ruled out: Cache Storage API, other on-disk files the Electron app
+    might use instead of/alongside IndexedDB.
+- **Next steps to try** (in rough priority order):
+  1. Find or write a more complete V8 deserializer that correctly
+     handles object back-references inside dense/sparse arrays — this
+     looks like the actual missing piece (repeated string keys across
+     many cached query entries likely get serialized as back-reference
+     tags, and mishandling those would produce exactly the observed
+     cascading misalignment).
+  2. Check whether `ccl_chromium_reader` has open issues/newer commits
+     upstream addressing this, or whether a different/newer Chromium
+     IndexedDB parsing tool exists that handles it correctly.
+  3. Look for conversation data in other on-disk locations the app
+     might use (Cache Storage API, other SQLite/LevelDB stores under the
+     same `LocalCache\Roaming\Claude\` tree) as an alternative or
+     supplementary source.
+  4. If the V8 deserializer gap proves genuinely unfixable in reasonable
+     time, consider writing a purpose-built minimal parser for just the
+     specific tag types this blob uses, rather than a general-purpose
+     V8 deserializer — narrower scope, more tractable.
+- Do not abandon this without exhausting the above — the user has
+  explicitly asked for continued, actively-pursued research on this
+  until solved (see chat log 2026-08-03).
+
 ## 6. Secure credential entry UI (HIGH)
 - Problem found during real end-to-end testing: `--setup`/`--join-device`/`sync`
   use `getpass.getpass()`/`input()`, which only work in a real interactive
