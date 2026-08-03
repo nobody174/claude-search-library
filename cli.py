@@ -260,6 +260,17 @@ def export(session_id: str, export_format: str, output: str) -> None:
 
 
 @cli.command()
+@click.option("--older-than", default=365, show_default=True, help="Prune raw chat content older than this many days")
+@click.option("--dry-run", is_flag=True, help="Report what would be pruned without deleting anything")
+def prune(older_than: int, dry_run: bool) -> None:
+    """Delete old raw chat content while keeping sessions/summaries searchable."""
+    from src.maintenance import prune_sessions
+
+    result = prune_sessions(older_than_days=older_than, dry_run=dry_run)
+    click.echo(json.dumps(result, indent=2))
+
+
+@cli.command()
 @click.option("--pull", is_flag=True, help="Pull only")
 @click.option("--push", is_flag=True, help="Push only")
 @click.option("--watch", is_flag=True, help="Run continuously as a daemon")
