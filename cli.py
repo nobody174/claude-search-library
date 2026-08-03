@@ -73,7 +73,7 @@ def query_command(query: str) -> None:
 @click.option(
     "--source", "sources",
     multiple=True,
-    type=click.Choice(["claude-ai", "vscode", "claude-code", "cowork", "local"]),
+    type=click.Choice(["claude-ai", "vscode", "claude-code", "claude-desktop", "cowork", "local"]),
     help="Collect from only this source (repeatable). Default: all sources.",
 )
 @click.option(

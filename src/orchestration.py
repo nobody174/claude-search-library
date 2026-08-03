@@ -22,7 +22,7 @@ from src import collector
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ("claude-ai", "vscode", "claude-code", "cowork", "local")
+SOURCES = ("claude-ai", "vscode", "claude-code", "claude-desktop", "cowork", "local")
 
 
 class CollectionError(RuntimeError):
@@ -42,6 +42,7 @@ def _collector_and_arg(source: str, folders: dict):
         "claude-ai": (collector.collect_from_claude_ai, folders.get("claude-ai")),
         "vscode": (collector.collect_from_vscode, folders.get("vscode")),
         "claude-code": (collector.collect_from_claude_code, folders.get("claude-code")),
+        "claude-desktop": (collector.collect_from_claude_desktop, folders.get("claude-desktop")),
         "cowork": (collector.collect_from_cowork, folders.get("cowork")),
         "local": (collector.collect_from_local, folders.get("local")),
     }[source]
@@ -54,6 +55,7 @@ def run_collection(
     claude_ai_folder: Optional[str] = None,
     vscode_extensions_path: Optional[str] = None,
     claude_code_projects_path: Optional[str] = None,
+    claude_desktop_indexeddb_root: Optional[str] = None,
     cowork_path: Optional[str] = None,
     local_folder: Optional[str] = None,
 ) -> dict:
@@ -79,6 +81,7 @@ def run_collection(
         "claude-ai": claude_ai_folder or defaults["claude-ai"],
         "vscode": vscode_extensions_path,
         "claude-code": claude_code_projects_path,
+        "claude-desktop": claude_desktop_indexeddb_root,
         "cowork": cowork_path,
         "local": local_folder or defaults["local"],
     }

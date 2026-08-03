@@ -32,6 +32,13 @@ apscheduler>=3.10.0
 # CLI
 click>=8.1.0
 
+# Claude desktop app collector (src/collector.py:collect_from_claude_desktop) -
+# reads the Electron app's local Chromium IndexedDB/LevelDB cache. Not on
+# PyPI under any of its documented names ("ccl_chrome_indexeddb",
+# "ccl-chromium-reader" do not exist there) - install straight from source.
+# Pulls in ccl_simplesnappy automatically.
+git+https://github.com/obsidianforensics/ccl_chrome_indexeddb.git
+
 # Development (optional)
 pytest>=7.0.0
 pytest-cov>=4.0.0

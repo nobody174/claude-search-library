@@ -285,6 +285,281 @@ def collect_from_claude_code(projects_path: Optional[str] = None) -> list[dict]:
     return sessions
 
 
+def _idb_ssv_decode(buf: bytes, blink_deserializer, raw_db, db_id: int, store_id: int, raw_key: bytes):
+    """Decode one IndexedDB record value's Blink-wrapped SerializedScriptValue
+    (SSV) payload into a Python object, using ccl_chromium_reader's V8/Blink
+    deserializers directly.
+
+    This exists instead of calling ccl_chromium_reader's own
+    IndexedDb.read_record_precursor()/iterate_records() because those don't
+    implement Chromium's "processing pseudo-version" wrapper used once a
+    value gets large enough to compress: real Chromium IDB values start with
+    `0xFF <wire-version-varint>`, but when the version equals
+    `0x11` (17 decimal, `kRequiresProcessingSSVPseudoVersion` - a sentinel,
+    not a real wire version) the *next* byte is a command, not payload:
+    `0x01` = kReplaceWithBlob (externalized to a `.blob` file - handled
+    separately by the library) or `0x02` = kCompressedWithSnappy (the rest
+    of the buffer is a raw Snappy stream that decompresses to another,
+    inner Blink-wrapped SSV). ccl_chromium_reader (as of the version
+    installed here, see requirements.txt) has no branch for `0x02` at all -
+    it hands the still-compressed bytes straight to the V8 deserializer,
+    which fails immediately or silently misparses. See upstream issue
+    https://github.com/cclgroupltd/ccl_chromium_reader/issues/44, which
+    this function implements the fix from. Chromium compresses any IDB
+    value once it crosses a size threshold, which is exactly the case for
+    a claude.ai react-query cache holding real conversation histories, so
+    this isn't an edge case for this collector - it's the common path.
+    """
+    from ccl_chromium_reader import ccl_chromium_indexeddb as idbmod
+    from ccl_chromium_reader.serialization_formats import ccl_v8_value_deserializer
+    import ccl_simplesnappy
+    import io as _io
+
+    if not buf or buf[0] != 0xFF:
+        raise ValueError("Not a Blink-wrapped SSV (missing 0xFF tag)")
+
+    pos = 1
+    version, vraw = idbmod._le_varint_from_bytes(buf[pos:])
+    pos += len(vraw)
+
+    if version == 0x11:  # kRequiresProcessingSSVPseudoVersion
+        command = buf[pos]
+        pos += 1
+        if command == 0x02:  # kCompressedWithSnappy
+            decompressed = ccl_simplesnappy.decompress(_io.BytesIO(buf[pos:]))
+            return _idb_ssv_decode(decompressed, blink_deserializer, raw_db, db_id, store_id, raw_key)
+        if command == 0x01:  # kReplaceWithBlob
+            blob_size, vraw2 = idbmod._le_varint_from_bytes(buf[pos:])
+            pos += len(vraw2)
+            blob_index, vraw3 = idbmod._le_varint_from_bytes(buf[pos:])
+            blob_bytes = raw_db.get_blob(db_id, store_id, raw_key, blob_index).read()
+            return _idb_ssv_decode(blob_bytes, blink_deserializer, raw_db, db_id, store_id, raw_key)
+        raise ValueError(f"Unknown IDB value-wrapping command byte {command:#x}")
+
+    # Genuine Blink wire version: a 13-byte trailer (tag + offset + length,
+    # big-endian) follows once the version is new enough to carry one,
+    # before the actual V8-serialized payload.
+    if version >= 21:
+        pos += 13
+
+    obj_raw = _io.BytesIO(buf[pos:])
+    deserializer = ccl_v8_value_deserializer.Deserializer(obj_raw, host_object_delegate=blink_deserializer.read)
+    return deserializer.read()
+
+
+def _extract_claude_desktop_content(content_blocks) -> str:
+    """Flatten a claude.ai desktop-app message's content blocks into plain
+    text, the same way _extract_text_content() does for Claude Code
+    transcripts: only "text"-typed blocks are user-authored/user-readable
+    narrative, "thinking" blocks are the model's internal reasoning and are
+    dropped here."""
+    if isinstance(content_blocks, str):
+        return content_blocks
+    parts = []
+    for block in content_blocks or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text", "")
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def _convert_claude_desktop_tree(tree: dict) -> Optional[dict]:
+    """Convert one decoded `chat_conversation_tree` react-query cache entry
+    (claude.ai's own conversation-detail API response shape, as cached
+    client-side) into the standard raw-export shape normalize_session()
+    expects."""
+    uuid = tree.get("uuid")
+    chat_messages = tree.get("chat_messages")
+    if not uuid or not chat_messages:
+        return None
+
+    messages = []
+    for m in chat_messages:
+        sender = m.get("sender")
+        role = {"human": "user", "assistant": "assistant"}.get(sender, sender or "user")
+        text = _extract_claude_desktop_content(m.get("content"))
+        if not text.strip():
+            continue
+        messages.append({"role": role, "content": text, "timestamp": m.get("created_at")})
+
+    if not messages:
+        return None
+
+    return {
+        "id": uuid,
+        "title": tree.get("name") or "Untitled conversation",
+        "created_at": tree.get("created_at") or messages[0]["timestamp"],
+        "updated_at": tree.get("updated_at") or messages[-1]["timestamp"],
+        "messages": messages,
+    }
+
+
+def _default_claude_desktop_indexeddb_root() -> Optional[Path]:
+    """Locate the Claude desktop app's (MSIX-packaged) Electron IndexedDB
+    directory. Windows-only today - the app is only installed as a
+    Microsoft Store package on this machine, virtualizing its userData dir
+    to %LOCALAPPDATA%\\Packages\\Claude_pzs8sxrjxfjjc\\...\\ rather than the
+    usual %APPDATA%\\Claude."""
+    if platform.system().lower() != "windows":
+        return None
+    local_appdata = Path.home() / "AppData" / "Local"
+    return (
+        local_appdata / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache"
+        / "Roaming" / "Claude" / "IndexedDB"
+    )
+
+
+def collect_from_claude_desktop(indexeddb_root: Optional[str] = None) -> list[dict]:
+    """Collect real conversation history cached by the Claude desktop app
+    (the claude.ai account, via the official Windows app) from its local
+    IndexedDB store.
+
+    The desktop app is an Electron/Chromium app. It uses IndexedDB
+    (LevelDB-backed) as a client-side cache for its React Query data
+    layer, including a "react-query-cache" entry holding dehydrated query
+    results - among them `chat_conversation_tree` queries, which carry a
+    conversation's full title + message history exactly as fetched from
+    claude.ai's own API, just cached to disk for fast reloads/offline use.
+    This reads that cache directly; it never talks to claude.ai's API
+    itself (see ROADMAP.md #9 for why that distinction matters and why
+    the API-scraping approach ruled out in #8 does not apply here).
+
+    Important limitation: this only recovers conversations the user has
+    actually *opened* in the desktop app while the query cache held them
+    (and that haven't since been evicted) - not full account history the
+    way the official Settings -> Export Data feature would give you. It's
+    a real, useful, incremental source, not a replacement for occasional
+    full-export catch-up (see ROADMAP.md #4).
+
+    The app holds a LevelDB single-writer lock while running, so this
+    always copies the whole IndexedDB directory (+ its sibling .blob
+    directory holding overflow/large values) to a temp location before
+    reading anything, and never opens or writes to the live store.
+    """
+    if indexeddb_root is None:
+        root = _default_claude_desktop_indexeddb_root()
+    else:
+        root = Path(indexeddb_root)
+
+    sessions: list[dict] = []
+    if root is None or not root.exists():
+        logger.info("Claude desktop IndexedDB store not found (root=%s)", root)
+        return sessions
+
+    leveldb_dir = root / "https_claude.ai_0.indexeddb.leveldb"
+    blob_dir = root / "https_claude.ai_0.indexeddb.blob"
+    if not leveldb_dir.exists():
+        logger.info("Claude desktop IndexedDB leveldb dir not found: %s", leveldb_dir)
+        return sessions
+
+    try:
+        from ccl_chromium_reader.ccl_chromium_indexeddb import WrappedIndexDB
+        from ccl_chromium_reader import ccl_chromium_indexeddb as idbmod
+    except ImportError:
+        logger.warning(
+            "ccl_chromium_reader not installed; cannot read the Claude desktop "
+            "IndexedDB store. Install with: pip install "
+            "git+https://github.com/obsidianforensics/ccl_chrome_indexeddb.git"
+        )
+        return sessions
+
+    import shutil
+    import tempfile
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="claude_desktop_idb_"))
+    try:
+        tmp_leveldb = tmp_dir / leveldb_dir.name
+        shutil.copytree(leveldb_dir, tmp_leveldb)
+        tmp_blob = None
+        if blob_dir.exists():
+            tmp_blob = tmp_dir / blob_dir.name
+            shutil.copytree(blob_dir, tmp_blob)
+
+        try:
+            with WrappedIndexDB(tmp_leveldb, tmp_blob) as db:
+                if "keyval-store" not in db:
+                    logger.info("Claude desktop IndexedDB has no 'keyval-store' database")
+                    return sessions
+                wdb = db["keyval-store"]
+                if "keyval" not in wdb.object_store_names:
+                    logger.info("Claude desktop 'keyval-store' has no 'keyval' object store")
+                    return sessions
+                store = wdb["keyval"]
+                db_id = store._dbid_no
+                store_id = store._obj_store_id
+                raw_db = store._raw_db
+
+                blink_deserializer = idbmod.ccl_blink_value_deserializer.BlinkV8Deserializer()
+                prefix = raw_db.make_prefix(db_id, store_id, 1)
+
+                trees: dict[str, dict] = {}
+                for record in raw_db._fetched_records:
+                    if not record.key.startswith(prefix):
+                        continue
+                    if record.state != idbmod.ccl_leveldb.KeyState.Live:
+                        continue
+                    if not record.value:
+                        continue
+                    key = idbmod.IdbKey(record.key[len(prefix):])
+                    if key.value != "react-query-cache":
+                        continue
+
+                    value_version, varint_raw = idbmod._le_varint_from_bytes(record.value)
+                    buf = record.value[len(varint_raw):]
+                    try:
+                        value = _idb_ssv_decode(buf, blink_deserializer, raw_db, db_id, store_id, key.raw_key)
+                    except Exception as e:
+                        logger.debug("Skipping undecodable react-query-cache record: %s", e)
+                        continue
+
+                    if not isinstance(value, dict):
+                        continue
+                    queries = (value.get("clientState") or {}).get("queries") or []
+                    for q in queries:
+                        if not isinstance(q, dict):
+                            continue
+                        query_key = q.get("queryKey")
+                        if not query_key or query_key[0] != "chat_conversation_tree":
+                            continue
+                        tree = (q.get("state") or {}).get("data")
+                        if not isinstance(tree, dict) or not tree.get("uuid"):
+                            continue
+                        existing = trees.get(tree["uuid"])
+                        if existing is None or len(tree.get("chat_messages") or []) >= len(
+                            existing.get("chat_messages") or []
+                        ):
+                            trees[tree["uuid"]] = tree
+        except Exception as e:
+            logger.warning("Failed to read Claude desktop IndexedDB store: %s", e)
+            return sessions
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    export_dir = Path.home() / ".claude-search-library" / "data" / "raw_exports" / "claude-desktop"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    for uuid, tree in trees.items():
+        raw = _convert_claude_desktop_tree(tree)
+        if raw is None:
+            continue
+
+        out_path = export_dir / f"{raw['id']}.json"
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(raw, f)
+        except OSError as e:
+            logger.warning("Failed to write converted conversation %s: %s", out_path, e)
+            continue
+
+        try:
+            sessions.append(normalize_session(raw, "claude-desktop", detect_device(), str(out_path)))
+        except Exception as e:
+            logger.warning("Failed to normalize claude-desktop conversation %s: %s", uuid, e)
+
+    return sessions
+
+
 def collect_from_local(folder_path: str) -> list[dict]:
     """Import any JSON files sitting in a local watch folder."""
     folder = Path(folder_path)
