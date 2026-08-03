@@ -114,6 +114,21 @@ def test_parse_summary_json_strips_markdown_fences():
     assert processor._parse_summary_json(fenced) == VALID_SUMMARY
 
 
+def test_parse_summary_json_handles_preamble_before_fence():
+    """Regression test: real API responses have been observed with prose
+    before the fenced JSON block (e.g. "Here's the session summary:\n\n```json...")
+    despite the system prompt asking for JSON only. The old implementation
+    only stripped fences found at position 0, so this raised
+    json.JSONDecodeError on every real occurrence."""
+    text = "That analysis complete, here's the session summary:\n\n```json\n" + json.dumps(VALID_SUMMARY) + "\n```"
+    assert processor._parse_summary_json(text) == VALID_SUMMARY
+
+
+def test_parse_summary_json_handles_bare_braces_with_surrounding_prose():
+    text = "Summary: " + json.dumps(VALID_SUMMARY) + "\nLet me know if you need anything else."
+    assert processor._parse_summary_json(text) == VALID_SUMMARY
+
+
 def test_truncate_to_token_limit_short_text_unchanged():
     text = "short text"
     assert processor._truncate_to_token_limit(text, max_tokens=1000) == text

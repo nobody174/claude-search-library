@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,14 +111,31 @@ def _extract_description(chat_dict: dict) -> str:
     return chat_dict.get("title") or "an unspecified task"
 
 
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
 def _parse_summary_json(text: str) -> dict:
+    """Extract and parse the summary JSON object from the model's response.
+
+    The system prompt asks for JSON with no preamble, but the model
+    doesn't always comply — real responses have been observed starting
+    with prose like "That analysis complete, here's the session
+    summary:" before the fenced JSON block. Rather than trust the
+    response to be pure JSON (or a fence at position 0), find the JSON
+    object wherever it appears: inside a ```json fence anywhere in the
+    text, or failing that, the outermost {...} span.
+    """
     text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text
-        if text.endswith("```"):
-            text = text[: -3]
-        if text.startswith("json"):
-            text = text[4:]
+
+    fence_match = _JSON_FENCE_RE.search(text)
+    if fence_match:
+        return json.loads(fence_match.group(1))
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(text[start : end + 1])
+
     return json.loads(text)
 
 
