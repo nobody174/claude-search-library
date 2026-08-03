@@ -73,21 +73,35 @@ def setup_endpoint():
 
 @app.route("/search", methods=["GET"])
 def search_endpoint():
-    """GET /search?q=QUERY&mode=hybrid&top_k=10
+    """GET /search?q=QUERY&mode=hybrid&top_k=10&filters=<url-encoded JSON>
 
     mode: "semantic" (ChromaDB, by meaning) | "keyword" (FTS5, fast) |
     "hybrid" (both, default — semantic results preferred, FTS5 fills gaps
     when semantic is slow or sparse; see src/search.py::hybrid_search).
+
+    filters: optional JSON object matching src/search.py's filter shape,
+    e.g. {"source": "claude-code", "device": "desktop",
+    "tags": ["minecraft"], "date_range": {"start": "...", "end": "..."}}.
     """
+    import json as _json
+
     query = request.args.get("q", "")
     top_k = int(request.args.get("top_k", 10))
     mode = request.args.get("mode", "hybrid")
+
+    filters = None
+    raw_filters = request.args.get("filters")
+    if raw_filters:
+        try:
+            filters = _json.loads(raw_filters)
+        except ValueError:
+            return jsonify({"error": "'filters' must be valid JSON"}), 400
 
     if not query:
         return jsonify({"error": "missing required query parameter 'q'"}), 400
 
     start = time.monotonic()
-    results = run_search(query, mode=mode, top_k=top_k)
+    results = run_search(query, mode=mode, top_k=top_k, filters=filters)
     query_time_ms = (time.monotonic() - start) * 1000
 
     return jsonify(
@@ -223,6 +237,61 @@ def import_endpoint():
         written.append(filename)
 
     return jsonify({"imported": len(written), "files": written})
+
+
+@app.route("/import-export", methods=["POST"])
+def import_export_endpoint():
+    """POST /import-export (multipart/form-data, field "file")
+
+    Accepts the real claude.ai Data Export a user downloads through
+    Settings -> Export data — either the ZIP itself or its bare
+    conversations.json — and converts it via
+    src/claude_export_import.import_official_export() into the
+    raw-export shape collect_from_claude_ai() watches. Unlike /import,
+    this understands the actual official export schema
+    (uuid/name/chat_messages[]/sender/text), not just pre-normalized
+    session objects.
+    """
+    import tempfile
+    import zipfile
+
+    from src.claude_export_import import import_official_export
+
+    uploaded = request.files.get("file")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"error": "no file uploaded (expected multipart field 'file')"}), 400
+
+    suffix = ".zip" if uploaded.filename.lower().endswith(".zip") else ".json"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        uploaded.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        result = import_official_export(tmp_path, output_dir=str(RAW_EXPORTS_CLAUDE_AI_DIR))
+    except (ValueError, OSError, zipfile.BadZipFile) as e:
+        return jsonify({"error": str(e)}), 400
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    return jsonify(result)
+
+
+@app.route("/costs", methods=["GET"])
+def costs_endpoint():
+    """GET /costs?month=YYYY-MM|&quarter=YYYY-QN — API spend report."""
+    from src.cost_tracker import get_report
+
+    month = request.args.get("month")
+    quarter = request.args.get("quarter")
+    if month and quarter:
+        return jsonify({"error": "pass only one of 'month' or 'quarter'"}), 400
+
+    try:
+        report = get_report(month=month, quarter=quarter)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify(report)
 
 
 @app.route("/devices", methods=["GET"])

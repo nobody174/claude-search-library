@@ -47,7 +47,7 @@ def test_search_endpoint_missing_query_returns_400(client):
 def test_search_endpoint_returns_results(client, monkeypatch):
     monkeypatch.setattr(
         "server.run_search",
-        lambda query, mode="semantic", top_k=10: [
+        lambda query, mode="semantic", top_k=10, filters=None: [
             {"session_id": "s1", "title": "t", "tldr": "tldr", "relevance_score": 0.9}
         ],
     )
@@ -63,7 +63,7 @@ def test_search_endpoint_returns_results(client, monkeypatch):
 def test_search_endpoint_defaults_to_hybrid_mode(client, monkeypatch):
     captured = {}
 
-    def fake_search(query, mode="semantic", top_k=10):
+    def fake_search(query, mode="semantic", top_k=10, filters=None):
         captured["mode"] = mode
         return []
 
@@ -78,7 +78,7 @@ def test_search_endpoint_defaults_to_hybrid_mode(client, monkeypatch):
 def test_search_endpoint_accepts_explicit_mode(client, monkeypatch):
     captured = {}
 
-    def fake_search(query, mode="semantic", top_k=10):
+    def fake_search(query, mode="semantic", top_k=10, filters=None):
         captured["mode"] = mode
         return []
 
@@ -89,6 +89,41 @@ def test_search_endpoint_accepts_explicit_mode(client, monkeypatch):
     assert captured["mode"] == "keyword"
     assert resp.get_json()["mode"] == "keyword"
     assert resp.get_json()["query"] == "minecraft"
+
+
+def test_search_endpoint_passes_filters_through(client, monkeypatch):
+    captured = {}
+
+    def fake_search(query, mode="semantic", top_k=10, filters=None):
+        captured["filters"] = filters
+        return []
+
+    monkeypatch.setattr("server.run_search", fake_search)
+
+    resp = client.get(
+        "/search?q=minecraft&" + "filters=" + json.dumps({"source": "claude-code", "tags": ["debugging"]})
+    )
+    assert resp.status_code == 200
+    assert captured["filters"] == {"source": "claude-code", "tags": ["debugging"]}
+
+
+def test_search_endpoint_no_filters_param_passes_none(client, monkeypatch):
+    captured = {}
+
+    def fake_search(query, mode="semantic", top_k=10, filters=None):
+        captured["filters"] = filters
+        return []
+
+    monkeypatch.setattr("server.run_search", fake_search)
+
+    resp = client.get("/search?q=minecraft")
+    assert resp.status_code == 200
+    assert captured["filters"] is None
+
+
+def test_search_endpoint_rejects_invalid_filters_json(client):
+    resp = client.get("/search?q=minecraft&filters=not-json")
+    assert resp.status_code == 400
 
 
 def test_session_endpoint_found(client):
@@ -463,3 +498,83 @@ def test_import_endpoint_writes_files_to_claude_ai_export_dir(client, import_dir
     assert len(written) == 2
     contents = [json.loads(f.read_text(encoding="utf-8"))["title"] for f in written]
     assert sorted(contents) == ["chat one", "chat two"]
+
+
+def test_import_export_endpoint_requires_file(client, import_dir):
+    resp = client.post("/import-export", data={}, content_type="multipart/form-data")
+    assert resp.status_code == 400
+
+
+def test_import_export_endpoint_converts_real_export_json(client, import_dir):
+    import io
+
+    conversations = [
+        {
+            "uuid": "conv-1",
+            "name": "Debugging a race condition",
+            "created_at": "2026-07-30T14:22:00Z",
+            "chat_messages": [
+                {"sender": "human", "text": "Why does this deadlock?", "created_at": "2026-07-30T14:22:05Z"},
+                {"sender": "assistant", "text": "Check lock ordering.", "created_at": "2026-07-30T14:22:15Z"},
+            ],
+        }
+    ]
+    data = {"file": (io.BytesIO(json.dumps(conversations).encode("utf-8")), "conversations.json")}
+
+    resp = client.post("/import-export", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["converted"] == 1
+
+    written = list(import_dir.glob("*.json"))
+    assert len(written) == 1
+    converted = json.loads(written[0].read_text(encoding="utf-8"))
+    assert converted["id"] == "conv-1"
+    assert converted["title"] == "Debugging a race condition"
+    assert converted["messages"][0]["role"] == "user"
+
+
+def test_import_export_endpoint_rejects_bad_zip(client, import_dir):
+    import io
+
+    data = {"file": (io.BytesIO(b"not a real zip"), "export.zip")}
+    resp = client.post("/import-export", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 400
+
+
+def test_costs_endpoint_returns_report(client):
+    from src.storage import Storage
+
+    with Storage() as db:
+        db.insert_session(_session("s1"))
+        db.log_api_cost(
+            "s1", "claude-haiku-4-5", input_tokens=1000, output_tokens=1000,
+            cost_usd=0.006, called_at="2026-08-01T00:00:00+00:00",
+        )
+
+    resp = client.get("/costs")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["calls"] == 1
+    assert data["total_cost_usd"] == pytest.approx(0.006)
+    assert data["period"] == "all-time"
+
+
+def test_costs_endpoint_scoped_to_month(client):
+    from src.storage import Storage
+
+    with Storage() as db:
+        db.insert_session(_session("s1"))
+        db.log_api_cost(
+            "s1", "claude-haiku-4-5", input_tokens=1000, output_tokens=1000,
+            cost_usd=0.006, called_at="2026-07-01T00:00:00+00:00",
+        )
+
+    resp = client.get("/costs?month=2026-08")
+    assert resp.status_code == 200
+    assert resp.get_json()["calls"] == 0
+
+
+def test_costs_endpoint_rejects_month_and_quarter_together(client):
+    resp = client.get("/costs?month=2026-08&quarter=2026-Q3")
+    assert resp.status_code == 400

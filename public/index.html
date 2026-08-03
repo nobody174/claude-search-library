@@ -4,19 +4,66 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>Claude Search Library</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='16' fill='%230a0e12'/%3E%3Ctext x='50' y='68' font-size='60' font-family='monospace' text-anchor='middle' fill='%23f0a500'%3E%3E%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Command-center theme: near-black bg, elevated dark-gray surfaces, a
+    // single amber accent (operational-status feel, not neon), hairline
+    // low-opacity borders, mono for data/metadata + sans for UI chrome.
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg: "#0a0e12",
+            surface: "#161b22",
+            surface2: "#1c222b",
+            accent: "#f0a500",
+            primary: "#e6edf3",
+            muted: "#8b949e",
+            hairline: "rgba(255,255,255,0.08)",
+            hairline2: "rgba(255,255,255,0.16)",
+            danger: "#f85149",
+            success: "#3fb950",
+          },
+          fontFamily: {
+            sans: ['"Inter"', "ui-sans-serif", "system-ui", "sans-serif"],
+            mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+          },
+        },
+      },
+    };
+  </script>
   <script src="../src/api.js"></script>
   <style>
     /* Touch-friendly minimum target size on top of Tailwind utility classes. */
     button, input, select {
       min-height: 44px;
     }
+    body {
+      /* Very low-opacity grid texture for the "ops dashboard" feel - kept
+         subtle enough it never competes with readability. */
+      background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    /* Flat, sharp-edged focus glow instead of a default browser outline -
+       small radius, no heavy shadow, matches the brief's "quietly powerful"
+       tone rather than a skeuomorphic glow. */
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(240, 165, 0, 0.35);
+      border-color: #f0a500 !important;
+    }
   </style>
 </head>
-<body class="bg-gray-50 text-gray-900">
+<body class="bg-bg text-primary font-sans">
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
@@ -42,22 +89,24 @@
 
     function Header({ view, onNavigate, onLock }) {
       return (
-        <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-          <h1 className="text-lg font-semibold">Claude Search Library</h1>
+        <header className="sticky top-0 z-10 bg-surface/95 backdrop-blur border-b border-hairline px-4 py-3 flex items-center justify-between">
+          <h1 className="text-lg font-semibold tracking-tight">
+            <span className="text-accent font-mono">&gt;</span> Claude Search Library
+          </h1>
           <nav className="flex gap-2">
             <button
-              className={`px-3 py-2 rounded text-sm ${view === "search" ? "bg-gray-900 text-white" : "bg-gray-100"}`}
+              className={`px-3 py-2 rounded text-sm transition-colors ${view === "search" ? "bg-accent text-bg font-medium" : "bg-surface2 text-muted hover:text-primary"}`}
               onClick={() => onNavigate("search")}
             >
               Search
             </button>
             <button
-              className={`px-3 py-2 rounded text-sm ${view === "devices" ? "bg-gray-900 text-white" : "bg-gray-100"}`}
+              className={`px-3 py-2 rounded text-sm transition-colors ${view === "devices" ? "bg-accent text-bg font-medium" : "bg-surface2 text-muted hover:text-primary"}`}
               onClick={() => onNavigate("devices")}
             >
               Sync
             </button>
-            <button className="px-3 py-2 rounded text-sm bg-gray-100" onClick={onLock}>
+            <button className="px-3 py-2 rounded text-sm bg-surface2 text-muted hover:text-primary transition-colors" onClick={onLock}>
               Lock
             </button>
           </nav>
@@ -95,27 +144,29 @@
 
       return (
         <div className="min-h-screen flex items-center justify-center px-4">
-          <form onSubmit={handleSubmit} className="w-full max-w-sm bg-white rounded-lg shadow p-6 space-y-4">
-            <h2 className="text-xl font-semibold text-center">Unlock Device</h2>
-            <p className="text-sm text-gray-500 text-center">
+          <form onSubmit={handleSubmit} className="w-full max-w-sm bg-surface border border-hairline rounded-lg p-6 space-y-4">
+            <h2 className="text-xl font-semibold text-center">
+              <span className="text-accent font-mono">&gt;</span> Unlock Device
+            </h2>
+            <p className="text-sm text-muted text-center">
               Enter your master passphrase and Authenticator code. Nothing is sent to the server except a verification check.
             </p>
             <div>
-              <label className="block text-sm font-medium mb-1" htmlFor="passphrase">
+              <label className="block text-sm font-medium mb-1 text-muted" htmlFor="passphrase">
                 Master passphrase
               </label>
               <input
                 id="passphrase"
                 type="password"
                 autoComplete="off"
-                className="w-full border border-gray-300 rounded px-3 py-2 search-box"
+                className="w-full bg-surface2 border border-hairline2 rounded px-3 py-2 search-box"
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
                 required
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1" htmlFor="totp">
+              <label className="block text-sm font-medium mb-1 text-muted" htmlFor="totp">
                 Authenticator code
               </label>
               <input
@@ -124,17 +175,17 @@
                 inputMode="numeric"
                 pattern="[0-9]{6}"
                 maxLength={6}
-                className="w-full border border-gray-300 rounded px-3 py-2 tracking-widest text-center"
+                className="w-full bg-surface2 border border-hairline2 rounded px-3 py-2 tracking-widest text-center font-mono"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
                 required
               />
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-danger">{error}</p>}
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-gray-900 text-white rounded py-2 font-medium disabled:opacity-50"
+              className="w-full bg-accent text-bg rounded py-2 font-medium disabled:opacity-50 hover:brightness-110 transition"
             >
               {loading ? "Verifying…" : "Setup Device"}
             </button>
@@ -190,35 +241,35 @@
       };
 
       return (
-        <div className="modal-overlay fixed inset-0 bg-black/40 flex items-center justify-center z-30 p-4">
-          <form onSubmit={handleSubmit} className="modal bg-white rounded-lg shadow w-full max-w-sm p-6 space-y-4">
+        <div className="modal-overlay fixed inset-0 bg-black/60 flex items-center justify-center z-30 p-4">
+          <form onSubmit={handleSubmit} className="modal bg-surface border border-hairline rounded-lg w-full max-w-sm p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">{title}</h2>
-              <button type="button" className="text-gray-400 text-2xl leading-none" onClick={onClose} aria-label="Close">
+              <button type="button" className="text-muted hover:text-primary text-2xl leading-none transition-colors" onClick={onClose} aria-label="Close">
                 &times;
               </button>
             </div>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted">
               {rememberedPassphrase
                 ? "Using this browser tab's remembered passphrase — a fresh authenticator code is still required every time."
                 : "Required every time — nothing is cached between requests. See ROADMAP.md #7 for why."}
             </p>
             {rememberedPassphrase ? (
-              <p className="text-xs text-gray-500">
-                <button type="button" className="text-blue-600 hover:underline" onClick={forgetPassphrase}>
+              <p className="text-xs text-muted">
+                <button type="button" className="text-accent hover:underline" onClick={forgetPassphrase}>
                   Use a different passphrase
                 </button>
               </p>
             ) : (
               <div>
-                <label className="block text-sm font-medium mb-1" htmlFor="sync-passphrase">
+                <label className="block text-sm font-medium mb-1 text-muted" htmlFor="sync-passphrase">
                   Master passphrase
                 </label>
                 <input
                   id="sync-passphrase"
                   type="password"
                   autoComplete="off"
-                  className="w-full border border-gray-300 rounded px-3 py-2"
+                  className="w-full bg-surface2 border border-hairline2 rounded px-3 py-2"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
                   required
@@ -227,7 +278,7 @@
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium mb-1" htmlFor="sync-totp">
+              <label className="block text-sm font-medium mb-1 text-muted" htmlFor="sync-totp">
                 Authenticator code
               </label>
               <input
@@ -236,22 +287,22 @@
                 inputMode="numeric"
                 pattern="[0-9]{6}"
                 maxLength={6}
-                className="w-full border border-gray-300 rounded px-3 py-2 tracking-widest text-center"
+                className="w-full bg-surface2 border border-hairline2 rounded px-3 py-2 tracking-widest text-center font-mono"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
                 required
                 autoFocus={rememberedPassphrase}
               />
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-danger">{error}</p>}
             <div className="flex gap-2 justify-end">
-              <button type="button" className="px-4 py-2 rounded text-sm bg-gray-100" onClick={onClose}>
+              <button type="button" className="px-4 py-2 rounded text-sm bg-surface2 text-muted hover:text-primary transition-colors" onClick={onClose}>
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={submitting}
-                className="px-4 py-2 rounded text-sm bg-gray-900 text-white disabled:opacity-50"
+                className="px-4 py-2 rounded text-sm bg-accent text-bg disabled:opacity-50 hover:brightness-110 transition"
               >
                 {submitting ? "Working…" : actionLabel}
               </button>
@@ -261,27 +312,36 @@
       );
     }
 
+    // Kept in sync with src/orchestration.py's SOURCES tuple - update this
+    // list whenever a new collector source is registered there.
+    const SOURCE_OPTIONS = [
+      { value: "claude-code", label: "Claude Code" },
+      { value: "claude-ai", label: "Claude.ai" },
+      { value: "vscode", label: "VS Code" },
+      { value: "cowork", label: "Cowork" },
+      { value: "local", label: "Local" },
+    ];
+
     function FilterPanel({ filters, onChange }) {
       return (
-        <div className="filter-panel bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <div className="filter-panel bg-surface rounded-lg border border-hairline p-4 space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+            <label className="block text-xs font-medium text-muted mb-1">Source</label>
             <select
-              className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+              className="w-full bg-surface2 border border-hairline2 rounded px-2 py-2 text-sm"
               value={filters.source || ""}
               onChange={(e) => onChange({ ...filters, source: e.target.value || undefined })}
             >
               <option value="">Any</option>
-              <option value="claude-ai">Claude.ai</option>
-              <option value="vscode">VS Code</option>
-              <option value="cowork">Cowork</option>
-              <option value="local">Local</option>
+              {SOURCE_OPTIONS.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Device</label>
+            <label className="block text-xs font-medium text-muted mb-1">Device</label>
             <select
-              className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+              className="w-full bg-surface2 border border-hairline2 rounded px-2 py-2 text-sm"
               value={filters.device || ""}
               onChange={(e) => onChange({ ...filters, device: e.target.value || undefined })}
             >
@@ -292,10 +352,10 @@
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Tags (comma-separated)</label>
+            <label className="block text-xs font-medium text-muted mb-1">Tags (comma-separated)</label>
             <input
               type="text"
-              className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+              className="w-full bg-surface2 border border-hairline2 rounded px-2 py-2 text-sm"
               value={filters.tags || ""}
               onChange={(e) => onChange({ ...filters, tags: e.target.value || undefined })}
               placeholder="minecraft, debugging"
@@ -303,19 +363,19 @@
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
+              <label className="block text-xs font-medium text-muted mb-1">From</label>
               <input
                 type="date"
-                className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+                className="w-full bg-surface2 border border-hairline2 rounded px-2 py-2 text-sm"
                 value={filters.dateStart || ""}
                 onChange={(e) => onChange({ ...filters, dateStart: e.target.value || undefined })}
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
+              <label className="block text-xs font-medium text-muted mb-1">To</label>
               <input
                 type="date"
-                className="w-full border border-gray-300 rounded px-2 py-2 text-sm"
+                className="w-full bg-surface2 border border-hairline2 rounded px-2 py-2 text-sm"
                 value={filters.dateEnd || ""}
                 onChange={(e) => onChange({ ...filters, dateEnd: e.target.value || undefined })}
               />
@@ -327,24 +387,24 @@
 
     function ResultCard({ result, onViewDetails }) {
       return (
-        <div className="result-card bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
+        <div className="result-card bg-surface rounded-lg border border-hairline p-4 hover:border-accent/40 transition-colors">
           <div className="flex items-start justify-between gap-2">
             <h3 className="font-semibold text-base">{result.title || "(untitled session)"}</h3>
-            <span className="text-xs shrink-0 bg-gray-100 rounded px-2 py-1">
+            <span className="text-xs shrink-0 bg-surface2 text-accent font-mono rounded px-2 py-1">
               {(result.relevance_score * 100).toFixed(0)}%
             </span>
           </div>
-          {result.tldr && <p className="text-sm text-gray-600 mt-1">{result.tldr}</p>}
-          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs text-gray-500">
+          {result.tldr && <p className="text-sm text-muted mt-1">{result.tldr}</p>}
+          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs text-muted font-mono">
             <span>{result.source}{result.device ? ` · ${result.device}` : ""}</span>
             {result.created_at && <span>{new Date(result.created_at).toLocaleDateString()}</span>}
             {result.search_type && <span className="italic">via {result.search_type}</span>}
           </div>
           {result.top_pattern && (
-            <p className="text-xs text-gray-500 mt-2 italic">"{result.top_pattern}"</p>
+            <p className="text-xs text-muted mt-2 italic">"{result.top_pattern}"</p>
           )}
           <button
-            className="mt-3 text-sm font-medium text-blue-600 hover:underline"
+            className="mt-3 text-sm font-medium text-accent hover:underline"
             onClick={() => onViewDetails(result.session_id)}
           >
             View Details →
@@ -369,25 +429,25 @@
       }, [sessionId]);
 
       return (
-        <div className="modal-overlay fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
-          <div className="modal bg-white rounded-t-lg sm:rounded-lg w-full sm:max-w-lg max-h-[85vh] overflow-y-auto p-5">
+        <div className="modal-overlay fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+          <div className="modal bg-surface border border-hairline rounded-t-lg sm:rounded-lg w-full sm:max-w-lg max-h-[85vh] overflow-y-auto p-5">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-semibold">{detail?.title || "Session"}</h2>
-              <button className="text-gray-400 text-2xl leading-none" onClick={onClose} aria-label="Close">
+              <button className="text-muted hover:text-primary text-2xl leading-none transition-colors" onClick={onClose} aria-label="Close">
                 &times;
               </button>
             </div>
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            {!detail && !error && <p className="text-sm text-gray-500">Loading…</p>}
+            {error && <p className="text-sm text-danger">{error}</p>}
+            {!detail && !error && <p className="text-sm text-muted">Loading…</p>}
 
             {detail && (
               <div className="space-y-4 text-sm">
                 {detail.summary?.tldr && (
-                  <p className="text-gray-700">{detail.summary.tldr}</p>
+                  <p className="text-primary/90">{detail.summary.tldr}</p>
                 )}
 
-                <div className="flex flex-wrap gap-x-3 text-xs text-gray-500">
+                <div className="flex flex-wrap gap-x-3 text-xs text-muted font-mono">
                   <span>Source: {detail.source}</span>
                   <span>Device: {detail.device}</span>
                   <span>Created: {detail.created_at}</span>
@@ -395,7 +455,7 @@
 
                 {detail.summary?.learnings?.length > 0 && (
                   <div>
-                    <h3 className="font-medium mb-1">Learnings</h3>
+                    <h3 className="font-medium mb-1 text-muted">Learnings</h3>
                     <ul className="list-disc list-inside space-y-1">
                       {detail.summary.learnings.map((l, i) => (
                         <li key={i}>{l}</li>
@@ -406,7 +466,7 @@
 
                 {detail.summary?.patterns?.length > 0 && (
                   <div>
-                    <h3 className="font-medium mb-1">Patterns</h3>
+                    <h3 className="font-medium mb-1 text-muted">Patterns</h3>
                     <ul className="list-disc list-inside space-y-1">
                       {detail.summary.patterns.map((p, i) => (
                         <li key={i}>{p}</li>
@@ -418,20 +478,24 @@
                 {detail.summary?.tags?.length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {detail.summary.tags.map((t, i) => (
-                      <span key={i} className="bg-gray-100 rounded-full px-2 py-1 text-xs">
+                      <span key={i} className="bg-surface2 text-muted rounded-full px-2 py-1 text-xs font-mono">
                         {t}
                       </span>
                     ))}
                   </div>
                 )}
 
-                {detail.link_to_raw && (
+                {detail.link_to_raw ? (
                   <a
                     href={detail.link_to_raw}
-                    className="inline-block text-blue-600 text-sm hover:underline"
+                    className="inline-block text-accent text-sm hover:underline"
                   >
                     View raw chat file
                   </a>
+                ) : (
+                  <p className="text-xs text-muted italic">
+                    Raw conversation text has been pruned (summary retained) — see `cli.py prune`.
+                  </p>
                 )}
               </div>
             )}
@@ -482,17 +546,22 @@
       return (
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
           <div className="search-container flex gap-2">
-            <input
-              type="search"
-              className="search-box flex-1 border border-gray-300 rounded-lg px-4 py-3 text-base"
-              placeholder="Search your chat history…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              autoFocus
-            />
+            <div className="relative flex-1">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-accent font-mono pointer-events-none">
+                &gt;
+              </span>
+              <input
+                type="search"
+                className="search-box w-full bg-surface border border-hairline2 rounded-lg pl-8 pr-4 py-3 text-base font-mono placeholder:text-muted placeholder:font-sans"
+                placeholder="Search your chat history…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoFocus
+              />
+            </div>
             <select
               id="search-mode"
-              className="border border-gray-300 rounded-lg px-2 text-sm shrink-0"
+              className="bg-surface border border-hairline2 rounded-lg px-2 text-sm shrink-0"
               value={mode}
               onChange={(e) => setMode(e.target.value)}
               aria-label="Search mode"
@@ -504,7 +573,7 @@
           </div>
 
           <details className="sm:hidden">
-            <summary className="text-sm font-medium text-gray-600 cursor-pointer">Filters</summary>
+            <summary className="text-sm font-medium text-muted cursor-pointer">Filters</summary>
             <div className="mt-2">
               <FilterPanel filters={filters} onChange={setFilters} />
             </div>
@@ -526,10 +595,10 @@
       );
 
       function ResultsColumn() {
-        if (loading) return <p className="text-sm text-gray-500">Searching…</p>;
-        if (error) return <p className="text-sm text-red-600">{error}</p>;
-        if (!query.trim()) return <p className="text-sm text-gray-400">Start typing to search.</p>;
-        if (results.length === 0) return <p className="text-sm text-gray-400">No results found.</p>;
+        if (loading) return <p className="text-sm text-muted font-mono">Searching…</p>;
+        if (error) return <p className="text-sm text-danger">{error}</p>;
+        if (!query.trim()) return <p className="text-sm text-muted/70">Start typing to search.</p>;
+        if (results.length === 0) return <p className="text-sm text-muted/70">No results found.</p>;
 
         return (
           <div className="space-y-3">
@@ -544,14 +613,31 @@
     function HealthBadge({ health }) {
       if (!health) return null;
       const healthy = health.healthy;
+      const [expanded, setExpanded] = useState(false);
+      const details = [...(health.errors || []), ...(health.warnings || [])];
+
       return (
-        <span
-          className={`text-xs rounded-full px-2 py-1 font-medium ${
-            healthy ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-          }`}
-        >
-          {healthy ? "Healthy" : "Unhealthy"}
-        </span>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => details.length > 0 && setExpanded((v) => !v)}
+            className={`text-xs rounded-full px-2 py-1 font-medium transition-colors ${
+              healthy ? "bg-success/15 text-success" : "bg-danger/15 text-danger hover:bg-danger/25"
+            } ${details.length > 0 ? "cursor-pointer" : "cursor-default"}`}
+          >
+            {healthy ? "Healthy" : `Unhealthy${details.length ? " ▾" : ""}`}
+          </button>
+          {expanded && details.length > 0 && (
+            <div className="absolute right-0 mt-2 w-72 bg-surface border border-hairline2 rounded-lg shadow-lg p-3 z-40 text-xs space-y-1">
+              {(health.errors || []).map((e, i) => (
+                <p key={`e${i}`} className="text-danger">{e}</p>
+              ))}
+              {(health.warnings || []).map((w, i) => (
+                <p key={`w${i}`} className="text-accent">{w}</p>
+              ))}
+            </div>
+          )}
+        </div>
       );
     }
 
@@ -561,30 +647,28 @@
       const [message, setMessage] = useState(null);
       const fileInputRef = useRef(null);
 
-      // A Claude.ai export file may be a single conversation object or an
-      // array of many (the real "Export data" zip's conversations.json is
-      // an array) - either shape flattens to a list of individual session
-      // objects, matching what collect_from_claude_ai() expects one-per-file.
-      const flattenToSessions = (parsed) => (Array.isArray(parsed) ? parsed : [parsed]);
-
+      // The real converter (src/claude_export_import.py, via /import-export)
+      // handles both the real official export ZIP and a bare
+      // conversations.json - no client-side parsing/flattening needed
+      // anymore, and it understands the actual official schema
+      // (uuid/name/chat_messages[]/sender/text), unlike the old client-side
+      // flatten which only worked for already-pre-normalized JSON.
       const handleFiles = async (fileList) => {
         setBusy(true);
         setMessage(null);
         try {
-          const files = Array.from(fileList).filter((f) => f.name.endsWith(".json"));
+          const files = Array.from(fileList).filter(
+            (f) => f.name.endsWith(".json") || f.name.endsWith(".zip")
+          );
           if (files.length === 0) {
-            throw new Error("No .json files found in the drop");
+            throw new Error("Drop a .zip (Settings → Export data) or conversations.json file");
           }
-          const texts = await Promise.all(files.map((f) => f.text()));
-          const sessions = texts.flatMap((text, i) => {
-            try {
-              return flattenToSessions(JSON.parse(text));
-            } catch (e) {
-              throw new Error(`${files[i].name} is not valid JSON`);
-            }
-          });
-          const result = await apiClient.importSessions(sessions);
-          setMessage(`Imported ${result.imported} session(s). Run "cli.py collect" to process them.`);
+          let converted = 0;
+          for (const file of files) {
+            const result = await apiClient.importExport(file);
+            converted += result.converted;
+          }
+          setMessage(`Converted ${converted} conversation(s). Run "cli.py collect" to process them.`);
           onImported();
         } catch (err) {
           setMessage(err.message);
@@ -596,7 +680,7 @@
       return (
         <div
           className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
-            dragging ? "border-gray-900 bg-gray-50" : "border-gray-300"
+            dragging ? "border-accent bg-accent/5" : "border-hairline2"
           }`}
           onDragOver={(e) => {
             e.preventDefault();
@@ -609,11 +693,11 @@
             handleFiles(e.dataTransfer.files);
           }}
         >
-          <p className="text-sm text-gray-500">
-            Drop Claude.ai export JSON here, or{" "}
+          <p className="text-sm text-muted">
+            Drop your claude.ai export (.zip or .json) here, or{" "}
             <button
               type="button"
-              className="text-blue-600 hover:underline"
+              className="text-accent hover:underline"
               onClick={() => fileInputRef.current?.click()}
               disabled={busy}
             >
@@ -623,13 +707,13 @@
           <input
             ref={fileInputRef}
             type="file"
-            accept=".json"
+            accept=".json,.zip"
             multiple
             className="hidden"
             onChange={(e) => e.target.files.length > 0 && handleFiles(e.target.files)}
           />
-          {busy && <p className="text-xs text-gray-400 mt-2">Importing…</p>}
-          {message && <p className="text-xs text-gray-600 mt-2">{message}</p>}
+          {busy && <p className="text-xs text-muted mt-2">Importing…</p>}
+          {message && <p className="text-xs text-muted mt-2">{message}</p>}
         </div>
       );
     }
@@ -638,6 +722,7 @@
       const [devices, setDevices] = useState([]);
       const [stats, setStats] = useState(null);
       const [health, setHealth] = useState(null);
+      const [costs, setCosts] = useState(null);
       const [error, setError] = useState(null);
       const [refreshing, setRefreshing] = useState(false);
       const [activeModal, setActiveModal] = useState(null); // "push" | "pull" | "bidirectional" | null
@@ -645,11 +730,17 @@
 
       const load = useCallback(() => {
         setError(null);
-        Promise.all([apiClient.getDevices(), apiClient.getStats(), apiClient.getHealth().catch(() => null)])
-          .then(([d, s, h]) => {
+        Promise.all([
+          apiClient.getDevices(),
+          apiClient.getStats(),
+          apiClient.getHealth().catch(() => null),
+          apiClient.getCosts().catch(() => null),
+        ])
+          .then(([d, s, h, c]) => {
             setDevices(d);
             setStats(s);
             setHealth(h);
+            setCosts(c);
           })
           .catch((err) => setError(err.message));
       }, []);
@@ -686,16 +777,16 @@
 
       return (
         <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-          <div className="device-status bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <div className="device-status bg-surface rounded-lg border border-hairline p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">Last sync</p>
-                <p className="font-medium">{stats?.last_sync || "Never"}</p>
+                <p className="text-sm text-muted">Last sync</p>
+                <p className="font-medium font-mono">{stats?.last_sync || "Never"}</p>
               </div>
               <div className="flex items-center gap-2">
                 <HealthBadge health={health} />
                 <button
-                  className="bg-gray-100 rounded px-3 py-2 text-sm disabled:opacity-50"
+                  className="bg-surface2 text-muted hover:text-primary transition-colors rounded px-3 py-2 text-sm disabled:opacity-50"
                   onClick={handleRefresh}
                   disabled={refreshing}
                 >
@@ -707,39 +798,59 @@
               {syncButtons.map((b) => (
                 <button
                   key={b.direction}
-                  className="flex-1 bg-gray-900 text-white rounded px-3 py-2 text-sm"
+                  className="flex-1 bg-accent text-bg rounded px-3 py-2 text-sm font-medium hover:brightness-110 transition"
                   onClick={() => setActiveModal(b.direction)}
                 >
                   {b.label}
                 </button>
               ))}
             </div>
-            {syncMessage && <p className="text-xs text-gray-600">{syncMessage}</p>}
+            {syncMessage && <p className="text-xs text-muted font-mono">{syncMessage}</p>}
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
 
           <div className="space-y-2">
             {devices.map((d) => (
-              <div key={d.device_id} className="bg-white rounded-lg border border-gray-200 p-4 flex justify-between">
+              <div key={d.device_id} className="bg-surface rounded-lg border border-hairline p-4 flex justify-between">
                 <div>
                   <p className="font-medium">{d.device_name || d.device_id}</p>
-                  <p className="text-xs text-gray-500">Last sync: {d.last_sync_at || "Never"}</p>
+                  <p className="text-xs text-muted font-mono">Last sync: {d.last_sync_at || "Never"}</p>
                 </div>
                 {d.pending_changes > 0 && (
-                  <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-1 self-start">
+                  <span className="text-xs bg-accent/15 text-accent rounded-full px-2 py-1 self-start">
                     {d.pending_changes} pending
                   </span>
                 )}
               </div>
             ))}
             {devices.length === 0 && !error && (
-              <p className="text-sm text-gray-400">No devices have synced yet.</p>
+              <p className="text-sm text-muted/70">No devices have synced yet.</p>
             )}
           </div>
 
+          {costs && (
+            <div className="bg-surface rounded-lg border border-hairline p-4">
+              <h3 className="text-sm font-medium text-muted mb-2">API spend</h3>
+              <div className="flex items-baseline justify-between">
+                <span className="text-2xl font-mono text-accent">${costs.total_cost_usd.toFixed(4)}</span>
+                <span className="text-xs text-muted">{costs.calls} call{costs.calls === 1 ? "" : "s"} · {costs.period}</span>
+              </div>
+              {Object.keys(costs.by_model || {}).length > 0 && (
+                <div className="mt-3 space-y-1">
+                  {Object.entries(costs.by_model).map(([model, m]) => (
+                    <div key={model} className="flex justify-between text-xs text-muted font-mono">
+                      <span>{model}</span>
+                      <span>{m.calls} calls · {m.input_tokens}in/{m.output_tokens}out · ${m.cost_usd.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
-            <h3 className="text-sm font-medium text-gray-700 mb-2">Import Claude.ai export</h3>
+            <h3 className="text-sm font-medium text-muted mb-2">Import claude.ai export</h3>
             <ImportDropzone onImported={load} />
           </div>
 
@@ -752,6 +863,28 @@
             />
           )}
         </div>
+      );
+    }
+
+    function StatusFooter() {
+      const [stats, setStats] = useState(null);
+      const [health, setHealth] = useState(null);
+
+      useEffect(() => {
+        apiClient.getStats().then(setStats).catch(() => {});
+        apiClient.getHealth().then(setHealth).catch(() => {});
+      }, []);
+
+      if (!stats) return null;
+
+      return (
+        <footer className="sticky bottom-0 bg-surface/95 backdrop-blur border-t border-hairline px-4 py-2 text-xs text-muted font-mono flex flex-wrap gap-x-4 gap-y-1 justify-center sm:justify-start">
+          <span>{stats.total_sessions ?? 0} sessions indexed</span>
+          <span>last sync: {stats.last_sync || "never"}</span>
+          <span className={health?.healthy === false ? "text-danger" : "text-success"}>
+            archive: {health?.healthy === false ? "unhealthy" : health ? "verified" : "…"}
+          </span>
+        </footer>
       );
     }
 
@@ -772,9 +905,12 @@
       }
 
       return (
-        <div className="min-h-screen">
+        <div className="min-h-screen flex flex-col">
           <Header view={view} onNavigate={setView} onLock={handleLock} />
-          {view === "search" ? <SearchPage /> : <DevicesPage />}
+          <div className="flex-1">
+            {view === "search" ? <SearchPage /> : <DevicesPage />}
+          </div>
+          <StatusFooter />
         </div>
       );
     }

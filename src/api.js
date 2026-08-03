@@ -47,19 +47,27 @@ async function setup(passphrase, totpCode) {
   }
 }
 
-function buildSearchParams(query, filters = {}) {
+function buildSearchParams(query, options = {}) {
   const params = new URLSearchParams({ q: query });
-  if (filters.top_k) params.set("top_k", String(filters.top_k));
-  if (filters.mode) params.set("mode", filters.mode);
+  if (options.top_k) params.set("top_k", String(options.top_k));
+  if (options.mode) params.set("mode", options.mode);
+  // options.filters is the {source, device, tags, date_range} shape
+  // src/search.py expects - it must travel as one JSON-encoded param
+  // (not flattened into individual query keys) since date_range/tags
+  // are structured, not scalar.
+  if (options.filters && Object.keys(options.filters).length > 0) {
+    params.set("filters", JSON.stringify(options.filters));
+  }
   return params;
 }
 
 /**
  * Run a search against the /search endpoint.
- * Returns the array of result objects (not the wrapping envelope).
+ * `options`: {top_k, mode, filters}. Returns the array of result objects
+ * (not the wrapping envelope).
  */
-async function search(query, filters = {}) {
-  const params = buildSearchParams(query, filters);
+async function search(query, options = {}) {
+  const params = buildSearchParams(query, options);
   const data = await request(`/search?${params.toString()}`);
   return data.results || [];
 }
@@ -126,11 +134,45 @@ async function importSessions(sessions) {
   });
 }
 
+/**
+ * Upload a claude.ai Data Export file (the ZIP from Settings -> Export
+ * data, or a bare conversations.json) for server-side conversion via
+ * src/claude_export_import.py — handles the real official export schema
+ * (uuid/name/chat_messages[]/sender/text), not just pre-normalized JSON.
+ *
+ * Returns {converted: number, skipped: number, files: string[]}.
+ */
+async function importExport(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  // Don't set Content-Type manually - the browser must set the multipart
+  // boundary itself, so this bypasses request()'s default JSON header.
+  const response = await fetch("/import-export", { method: "POST", body: formData });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = (body && body.error) || `Request to /import-export failed with status ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
+}
+
+/** Fetch API spend, optionally scoped to a month ("YYYY-MM") or quarter ("YYYY-QN"). */
+async function getCosts(options = {}) {
+  const params = new URLSearchParams();
+  if (options.month) params.set("month", options.month);
+  if (options.quarter) params.set("quarter", options.quarter);
+  const qs = params.toString();
+  return request(`/costs${qs ? `?${qs}` : ""}`);
+}
+
 // Exposed as a global for the CDN-based React app (public/index.html) and
 // as CommonJS exports for anything that runs under Node/Jest.
 const api = {
   setup, search, getSession, getStats, getDevices, approveReview,
-  getHealth, sync, importSessions,
+  getHealth, sync, importSessions, importExport, getCosts,
 };
 
 if (typeof window !== "undefined") {
