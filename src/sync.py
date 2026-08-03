@@ -79,16 +79,34 @@ def _write_sync_metadata(repo_path: Path, metadata: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def _update_device_metadata(repo_path: Path, pending_changes: int = 0) -> None:
+def _update_device_metadata(repo_path: Path, pending_changes: int = 0, bump_push_checkpoint: bool = False) -> None:
+    """Update this device's sync_metadata.json entry.
+
+    `last_sync_at`/`last_heartbeat` reflect "last time this device did any
+    sync operation" (push or pull) — used only for the dashboard's "Last
+    sync" display. They must NOT be used as the incremental-push
+    checkpoint: pull_from_github() used to call this with no way to opt
+    out, so a pull immediately followed by a push would stamp
+    last_sync_at to *now*, and push_to_github()'s "only push sessions
+    updated after last_sync_at" filter would then treat every real,
+    never-before-pushed session as already synced (since their
+    updated_at is always in the past relative to a pull that just
+    happened) — silently skipping the push. `last_push_at` is a separate
+    checkpoint, bumped only when bump_push_checkpoint=True (i.e. from
+    push_to_github after a successful push), so pulling never resets it.
+    """
     metadata = _read_sync_metadata(repo_path)
     now = datetime.now(timezone.utc).isoformat()
     device_id = _device_id()
-    metadata.setdefault("devices", {})[device_id] = {
+    existing = metadata.setdefault("devices", {}).get(device_id, {})
+    entry = {
         "device_name": device_id,
         "last_sync_at": now,
         "last_heartbeat": now,
         "pending_changes": pending_changes,
+        "last_push_at": now if bump_push_checkpoint else existing.get("last_push_at"),
     }
+    metadata["devices"][device_id] = entry
     _write_sync_metadata(repo_path, metadata)
 
 
@@ -143,23 +161,23 @@ class SyncWorker:
         self.chroma_path = chroma_path
 
     def check_for_changes(self) -> int:
-        """Count sessions modified since this device's last sync.
+        """Count sessions modified since this device's last push.
 
         Quick local SQLite check only — no network access.
         """
         metadata = _read_sync_metadata(self.repo_path)
         device_id = _device_id()
-        last_sync_at = metadata.get("devices", {}).get(device_id, {}).get("last_sync_at")
+        last_push_at = metadata.get("devices", {}).get(device_id, {}).get("last_push_at")
 
         with Storage(self.db_path) as db:
             sessions = db.get_all_sessions()
 
-        if not last_sync_at:
+        if not last_push_at:
             return len(sessions)
 
         changed = [
             s for s in sessions
-            if (s.get("updated_at") or s.get("created_at") or "") > last_sync_at
+            if (s.get("updated_at") or s.get("created_at") or "") > last_push_at
         ]
         return len(changed)
 
@@ -170,7 +188,11 @@ class SyncWorker:
 
         metadata = _read_sync_metadata(self.repo_path)
         device_id = _device_id()
-        last_sync_at = metadata.get("devices", {}).get(device_id, {}).get("last_sync_at")
+        # last_push_at, not last_sync_at: a pull must never advance this
+        # checkpoint, or a pull-then-push (the normal daily flow) would
+        # see every real session as "already synced" and push nothing —
+        # see _update_device_metadata's docstring for the full story.
+        last_push_at = metadata.get("devices", {}).get(device_id, {}).get("last_push_at")
 
         sessions_dir = self.repo_path / ENCRYPTED_SESSIONS_DIR
         summaries_dir = self.repo_path / ENCRYPTED_SUMMARIES_DIR
@@ -184,7 +206,7 @@ class SyncWorker:
             sessions = db.get_all_sessions()
             for session in sessions:
                 updated = session.get("updated_at") or session.get("created_at") or ""
-                if last_sync_at and updated <= last_sync_at:
+                if last_push_at and updated <= last_push_at:
                     continue
 
                 # Session metadata must be pushed too, not just the summary:
@@ -216,7 +238,7 @@ class SyncWorker:
                     raw_out_path.write_text(blob, encoding="utf-8")
                     files_changed.append(str(raw_out_path.relative_to(self.repo_path)))
 
-        _update_device_metadata(self.repo_path, pending_changes=0)
+        _update_device_metadata(self.repo_path, pending_changes=0, bump_push_checkpoint=True)
 
         if files_changed:
             repo.index.add(files_changed + [SYNC_METADATA_FILENAME])

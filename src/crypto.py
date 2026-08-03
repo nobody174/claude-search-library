@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import base64
 import getpass
+import json
 import logging
 import os
 import secrets as secrets_module
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +30,17 @@ LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "crypto.log"
 SECRETS_FILENAME = "secrets.enc"
 TOTP_ISSUER = "Claude Search Library"
 TOTP_VALID_WINDOW = 1  # +/- 1 time step (30s each) tolerance for clock drift
+
+# "Stay logged in" window for join_device_existing_setup(): every sync CLI
+# call re-derives the encryption key from scratch by default, which means
+# a passphrase + TOTP popup on every single push/pull. For a personal,
+# single-user machine that's pure friction with no real security benefit,
+# so a successful login caches the derived key (and TOTP secret) here for
+# SESSION_CACHE_TTL_SECONDS. This intentionally holds near-plaintext key
+# material on disk for that window — acceptable on a private laptop only
+# a single account can read; do not do this on a shared machine.
+SESSION_CACHE_PATH = Path.home() / ".claude-search-library" / ".session_cache.json"
+SESSION_CACHE_TTL_SECONDS = 30 * 60
 
 # Terminal prompts (getpass/input) only work in a genuine interactive TTY —
 # any automated caller (an agent driving the CLI, a scheduled task, a
@@ -332,9 +345,63 @@ def setup_device_first_time() -> dict:
     return {"encryption_key": encryption_key, "totp_secret": totp_secret}
 
 
+def _load_cached_session() -> Optional[dict]:
+    """Return {"encryption_key", "totp_secret"} from the session cache if
+    still within SESSION_CACHE_TTL_SECONDS, else None (clearing an expired
+    or corrupt cache file as a side effect)."""
+    try:
+        with open(SESSION_CACHE_PATH, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        expires_at = datetime.fromisoformat(cached["expires_at"])
+        encryption_key = cached["encryption_key"].encode("utf-8")
+        totp_secret = cached["totp_secret"]
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        return None
+
+    if datetime.now(timezone.utc) >= expires_at:
+        _clear_session_cache()
+        return None
+
+    return {"encryption_key": encryption_key, "totp_secret": totp_secret}
+
+
+def _save_session_cache(encryption_key: bytes, totp_secret: str) -> None:
+    SESSION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=SESSION_CACHE_TTL_SECONDS)
+    with open(SESSION_CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "encryption_key": encryption_key.decode("utf-8"),
+                "totp_secret": totp_secret,
+                "expires_at": expires_at.isoformat(),
+            },
+            f,
+        )
+    try:
+        os.chmod(SESSION_CACHE_PATH, 0o600)
+    except OSError:
+        pass  # best-effort; Windows doesn't enforce POSIX permission bits
+
+
+def _clear_session_cache() -> None:
+    try:
+        SESSION_CACHE_PATH.unlink()
+    except OSError:
+        pass
+
+
 def join_device_existing_setup() -> dict:
-    """Join-device flow: fetch + decrypt the existing TOTP secret, verify, derive the key."""
+    """Join-device flow: fetch + decrypt the existing TOTP secret, verify, derive the key.
+
+    Short-circuits entirely (no popup, no network call) if a still-valid
+    cached session exists — see SESSION_CACHE_PATH's docstring above.
+    """
     _setup_file_logging()
+
+    cached = _load_cached_session()
+    if cached is not None:
+        logger.info("join_device_existing_setup: using cached session")
+        return cached
 
     passphrase = _prompt_passphrase_gui_aware("Join Existing Device")
     encrypted_totp = _fetch_secrets_from_github()
@@ -356,10 +423,12 @@ def join_device_existing_setup() -> dict:
         raise ValueError("Invalid TOTP code")
 
     encryption_key = derive_encryption_key(passphrase, totp_secret)
+    _save_session_cache(encryption_key, totp_secret)
 
     logger.info("join_device_existing_setup: complete")
     print("Same encryption key as first device.")
     print("Same TOTP secret synced.")
+    print(f"Session cached for {SESSION_CACHE_TTL_SECONDS // 60} minutes — no re-prompt until then.")
 
     return {"encryption_key": encryption_key, "totp_secret": totp_secret}
 

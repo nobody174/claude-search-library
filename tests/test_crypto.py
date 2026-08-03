@@ -14,6 +14,11 @@ def redirect_log(tmp_path, monkeypatch):
     # not just a default: a real popup escaped into a pytest run once
     # already (see the regression tests below) and looped indefinitely.
     monkeypatch.setattr(crypto, "USE_GUI_AUTH", False)
+    # join_device_existing_setup() writes a session cache file on success;
+    # without this redirect every test that exercises the full join flow
+    # would write to (and could read a stale session from) the real
+    # ~/.claude-search-library/.session_cache.json.
+    monkeypatch.setattr(crypto, "SESSION_CACHE_PATH", tmp_path / ".session_cache.json")
     yield
 
 
@@ -171,6 +176,71 @@ def test_join_device_existing_setup_wrong_passphrase_fails(monkeypatch):
 
     with pytest.raises(ValueError):
         crypto.join_device_existing_setup()
+
+
+def test_join_device_existing_setup_caches_session_after_full_flow(monkeypatch):
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: passphrase)
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+    monkeypatch.setattr(crypto, "display_qr_code", lambda uri: None)
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: pyotp.TOTP(fixed_secret).now())
+
+    crypto.join_device_existing_setup()
+
+    assert crypto.SESSION_CACHE_PATH.exists()
+    cached = crypto._load_cached_session()
+    assert cached is not None
+    assert cached["totp_secret"] == fixed_secret
+    assert cached["encryption_key"] == crypto.derive_encryption_key(passphrase, fixed_secret)
+
+
+def test_join_device_existing_setup_uses_cache_without_reprompting(monkeypatch):
+    """Regression test for the "logs in 3 times in one session" friction:
+    a still-valid cached session must short-circuit join_device_existing_setup()
+    entirely - no passphrase prompt, no GitHub fetch, no QR/TOTP prompt."""
+    key = crypto.derive_encryption_key("cached-passphrase", "JBSWY3DPEHPK3PXP")
+    crypto._save_session_cache(key, "JBSWY3DPEHPK3PXP")
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("should not prompt/fetch when a valid session is cached")
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", _fail)
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", _fail)
+    monkeypatch.setattr(crypto, "_prompt_totp_code", _fail)
+
+    result = crypto.join_device_existing_setup()
+
+    assert result == {"encryption_key": key, "totp_secret": "JBSWY3DPEHPK3PXP"}
+
+
+def test_join_device_existing_setup_expired_cache_falls_through(monkeypatch):
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    crypto.SESSION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    crypto.SESSION_CACHE_PATH.write_text(
+        json.dumps({"encryption_key": "stale", "totp_secret": "stale", "expires_at": expired.isoformat()}),
+        encoding="utf-8",
+    )
+
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: passphrase)
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+    monkeypatch.setattr(crypto, "display_qr_code", lambda uri: None)
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: pyotp.TOTP(fixed_secret).now())
+
+    result = crypto.join_device_existing_setup()
+
+    assert result["totp_secret"] == fixed_secret  # real flow ran, not the stale cache
 
 
 def test_resolve_encryption_key_matches_join_device_flow(monkeypatch):

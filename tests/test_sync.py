@@ -117,7 +117,7 @@ def test_check_for_changes_respects_last_sync(repo_path, mock_repo, tmp_path, en
 
     metadata = {
         "devices": {
-            "test-device": {"last_sync_at": "2026-07-31T00:00:00+00:00", "pending_changes": 0}
+            "test-device": {"last_push_at": "2026-07-31T00:00:00+00:00", "pending_changes": 0}
         }
     }
     (repo_path / sync.SYNC_METADATA_FILENAME).write_text(json.dumps(metadata), encoding="utf-8")
@@ -166,7 +166,7 @@ def test_push_to_github_skips_already_synced_sessions(repo_path, mock_repo, tmp_
         db.store_summary("sess-1", SAMPLE_SUMMARY)
 
     metadata = {
-        "devices": {"test-device": {"last_sync_at": "2026-07-31T00:00:00+00:00", "pending_changes": 0}}
+        "devices": {"test-device": {"last_push_at": "2026-07-31T00:00:00+00:00", "pending_changes": 0}}
     }
     (repo_path / sync.SYNC_METADATA_FILENAME).write_text(json.dumps(metadata), encoding="utf-8")
 
@@ -175,6 +175,30 @@ def test_push_to_github_skips_already_synced_sessions(repo_path, mock_repo, tmp_
 
     assert result["files_changed"] == 0
     mock_repo.remote.return_value.push.assert_not_called()
+
+
+def test_pull_does_not_suppress_a_later_push(repo_path, mock_repo, tmp_path, encryption_key):
+    """Regression test: pull_from_github() used to bump this device's
+    last_sync_at to "now", and push_to_github() used that same field as
+    its "only push sessions updated after this" checkpoint. Since a
+    session's updated_at is always in the past relative to a pull that
+    just happened, a pull immediately followed by a push — the ordinary
+    "check for changes, then sync" flow — silently pushed nothing at
+    all, even for a session that had never been pushed before.
+    """
+    db_path = str(tmp_path / "test.db")
+    with Storage(db_path) as db:
+        db.insert_session(_sample_session(updated_at="2026-07-31T15:00:00+00:00"))
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+
+    # A pull with nothing to pull still calls _update_device_metadata().
+    worker.pull_from_github()
+
+    # The never-before-pushed session must still go out.
+    result = worker.push_to_github()
+    assert result["files_changed"] > 0
+    mock_repo.remote.return_value.push.assert_called_once()
 
 
 def test_pull_from_github_decrypts_and_merges(repo_path, mock_repo, tmp_path, encryption_key):
