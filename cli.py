@@ -274,17 +274,38 @@ def prune(older_than: int, dry_run: bool) -> None:
 @click.option("--pull", is_flag=True, help="Pull only")
 @click.option("--push", is_flag=True, help="Push only")
 @click.option("--watch", is_flag=True, help="Run continuously as a daemon")
-def sync(pull: bool, push: bool, watch: bool) -> None:
-    """Sync session data to/from GitHub. Defaults to bidirectional."""
+@click.option(
+    "--no-collect", is_flag=True,
+    help="Skip collecting from local sources first (default: always collect, "
+         "including the desktop-app collector, before syncing).",
+)
+def sync(pull: bool, push: bool, watch: bool, no_collect: bool) -> None:
+    """Sync session data to/from GitHub. Defaults to bidirectional.
+
+    Collects from every local source first (unless --no-collect) so
+    anything new sitting only on this machine - most importantly the
+    claude-desktop collector's freshly-cached conversations, which only
+    exist locally until pushed - is included in the sync rather than
+    requiring a separate `collect` step to remember to run first.
+    """
     from src import crypto
+    from src.orchestration import run_collection
     from src.sync import SyncWorker
+
+    if not no_collect:
+        click.echo("Collecting from local sources first...")
+        collect_result = run_collection(fail_fast=False)
+        click.echo(
+            f"Collected {collect_result['new']} new session(s) "
+            f"({collect_result['errors']} error(s))"
+        )
 
     encryption_key = crypto.join_device_existing_setup()["encryption_key"]
     worker = SyncWorker(encryption_key=encryption_key)
 
     if watch:
         click.echo("Starting sync daemon (Ctrl+C to stop)...")
-        worker.daemon_loop()
+        worker.daemon_loop(collect_first=not no_collect)
         return
 
     if pull and not push:

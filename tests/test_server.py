@@ -22,6 +22,16 @@ def client(tmp_path, monkeypatch):
     import src.storage as storage_module
     monkeypatch.setattr(storage_module, "DEFAULT_DB_PATH", tmp_path / "test.db")
 
+    # /sync now collects from every local source first by default (see
+    # server.py's /sync docstring) - stub it out so tests don't hit the
+    # real local collectors (notably the slow claude-desktop one).
+    # Individual tests that want to assert on this behavior override it.
+    import src.orchestration as orchestration_module
+    monkeypatch.setattr(
+        orchestration_module, "run_collection",
+        lambda fail_fast=False: {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+
     server.app.config["TESTING"] = True
     with server.app.test_client() as c:
         yield c
@@ -429,6 +439,48 @@ def test_sync_endpoint_push_only_uses_flat_push_result(client, monkeypatch):
     # push_to_github() never returns a "reindexed" key - endpoint must default it.
     assert data["reindexed"] == 0
     assert _FakeSyncWorker.instances[0].calls == ["push"]
+
+
+def test_sync_endpoint_collects_before_syncing(client, monkeypatch):
+    import src.orchestration as orchestration_module
+
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
+    _FakeSyncWorker.instances = []
+    monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
+
+    calls = []
+    monkeypatch.setattr(
+        orchestration_module, "run_collection",
+        lambda fail_fast=False: calls.append(1) or {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    assert len(calls) == 1
+
+
+def test_sync_endpoint_collect_failure_does_not_block_sync(client, monkeypatch):
+    import src.orchestration as orchestration_module
+
+    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
+    _FakeSyncWorker.instances = []
+    monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
+
+    def failing_collect(fail_fast=False):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestration_module, "run_collection", failing_collect)
+
+    resp = client.post(
+        "/sync",
+        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
 
 
 def test_sync_endpoint_sync_failure_returns_500(client, monkeypatch):

@@ -425,6 +425,19 @@ def test_sync_propagates_errors(repo_path, mock_repo, tmp_path, encryption_key, 
         worker.sync(direction="pull")
 
 
+@pytest.fixture(autouse=True)
+def stub_run_collection(monkeypatch):
+    """daemon_loop() now collects before every iteration by default
+    (see collect_first) - stub it out in tests that aren't specifically
+    exercising that behavior so they don't hit the real local collectors."""
+    import src.orchestration as orchestration_module
+
+    monkeypatch.setattr(
+        orchestration_module, "run_collection",
+        lambda fail_fast=False, db_path=None: {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+
+
 def test_daemon_loop_syncs_when_changes_detected(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=str(tmp_path / "test.db"))
 
@@ -462,3 +475,39 @@ def test_daemon_loop_runs_multiple_iterations(repo_path, mock_repo, tmp_path, en
 
     worker.daemon_loop(interval=0, iterations=3)
     assert call_count["n"] == 3
+
+
+def test_daemon_loop_collects_before_each_iteration_by_default(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
+    import src.orchestration as orchestration_module
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=str(tmp_path / "test.db"))
+
+    collect_calls = []
+    monkeypatch.setattr(
+        orchestration_module, "run_collection",
+        lambda fail_fast=False, db_path=None: collect_calls.append(1) or {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+    monkeypatch.setattr(worker, "check_for_changes", lambda: 0)
+    monkeypatch.setattr(worker, "pull_from_github", lambda: None)
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+
+    worker.daemon_loop(interval=0, iterations=3)
+    assert len(collect_calls) == 3
+
+
+def test_daemon_loop_collect_first_false_skips_collection(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
+    import src.orchestration as orchestration_module
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=str(tmp_path / "test.db"))
+
+    collect_calls = []
+    monkeypatch.setattr(
+        orchestration_module, "run_collection",
+        lambda fail_fast=False, db_path=None: collect_calls.append(1) or {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+    monkeypatch.setattr(worker, "check_for_changes", lambda: 0)
+    monkeypatch.setattr(worker, "pull_from_github", lambda: None)
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+
+    worker.daemon_loop(interval=0, iterations=2, collect_first=False)
+    assert len(collect_calls) == 0

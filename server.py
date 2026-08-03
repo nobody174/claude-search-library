@@ -173,6 +173,19 @@ def sync_endpoint():
     except ValueError as e:
         return jsonify({"error": str(e)}), 401
 
+    # Collect from every local source first - notably the claude-desktop
+    # collector, whose freshly-cached conversations only exist on this
+    # machine until collected - so a sync triggered from the web UI
+    # includes anything new without the user having to remember to run
+    # `cli.py collect` separately first. Best-effort: a collector error
+    # here shouldn't block the sync the user actually asked for.
+    try:
+        from src.orchestration import run_collection
+
+        run_collection(fail_fast=False)
+    except Exception as e:
+        app.logger.warning("Pre-sync collect failed: %s", e)
+
     try:
         worker = SyncWorker(encryption_key)
         # Mirror cli.py's sync command: pull_from_github()/push_to_github()

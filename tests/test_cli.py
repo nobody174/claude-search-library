@@ -258,6 +258,10 @@ def test_verify_command_json_output(runner, monkeypatch):
 
 def test_sync_command_default_bidirectional(runner, monkeypatch):
     monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda fail_fast=False: {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
 
     class FakeWorker:
         def __init__(self, encryption_key):
@@ -270,12 +274,16 @@ def test_sync_command_default_bidirectional(runner, monkeypatch):
 
     result = runner.invoke(cli.cli, ["sync"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.output[result.output.index("{"):])
     assert data["direction"] == "bidirectional"
 
 
 def test_sync_command_pull_only(runner, monkeypatch):
     monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda fail_fast=False: {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
 
     class FakeWorker:
         def __init__(self, encryption_key):
@@ -288,5 +296,50 @@ def test_sync_command_pull_only(runner, monkeypatch):
 
     result = runner.invoke(cli.cli, ["sync", "--pull"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.output[result.output.index("{"):])
     assert data["direction"] == "pull"
+
+
+def test_sync_command_collects_before_syncing_by_default(runner, monkeypatch):
+    monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
+    calls = []
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda fail_fast=False: calls.append(1) or {"new": 3, "errors": 0, "total": 3, "sources": {}},
+    )
+
+    class FakeWorker:
+        def __init__(self, encryption_key):
+            pass
+
+        def sync(self, direction="bidirectional"):
+            return {"direction": direction, "files_changed": 0}
+
+    monkeypatch.setattr("src.sync.SyncWorker", FakeWorker)
+
+    result = runner.invoke(cli.cli, ["sync"])
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert "Collected 3 new session(s)" in result.output
+
+
+def test_sync_command_no_collect_skips_collection(runner, monkeypatch):
+    monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
+    calls = []
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda fail_fast=False: calls.append(1) or {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+
+    class FakeWorker:
+        def __init__(self, encryption_key):
+            pass
+
+        def sync(self, direction="bidirectional"):
+            return {"direction": direction, "files_changed": 0}
+
+    monkeypatch.setattr("src.sync.SyncWorker", FakeWorker)
+
+    result = runner.invoke(cli.cli, ["sync", "--no-collect"])
+    assert result.exit_code == 0
+    assert len(calls) == 0

@@ -405,15 +405,35 @@ class SyncWorker:
             logger.error("sync failed: direction=%s error=%s", direction, e)
             raise
 
-    def daemon_loop(self, interval: int = DEFAULT_SYNC_INTERVAL_SECONDS, iterations: Optional[int] = None) -> None:
+    def daemon_loop(
+        self,
+        interval: int = DEFAULT_SYNC_INTERVAL_SECONDS,
+        iterations: Optional[int] = None,
+        collect_first: bool = True,
+    ) -> None:
         """Run sync on a fixed interval, checking for local changes first.
 
         Exits silently (no network call) when there is nothing to push,
         but still pulls to catch changes from other devices.
+
+        collect_first=True (default) runs every local collector - notably
+        the claude-desktop collector, whose freshly-cached conversations
+        only exist on this machine until collected - before each
+        check-for-changes/sync pass, so a long-running `sync --watch`
+        picks up new local data on its own rather than requiring a
+        separate `collect` process running alongside it.
         """
         _setup_file_logging()
         count = 0
         while iterations is None or count < iterations:
+            if collect_first:
+                try:
+                    from src.orchestration import run_collection
+
+                    run_collection(fail_fast=False, db_path=self.db_path)
+                except Exception as e:
+                    logger.error("daemon: collect failed: %s", e)
+
             changed = self.check_for_changes()
             if changed > 0:
                 logger.info("daemon: %d local change(s) detected, syncing", changed)
