@@ -337,28 +337,30 @@ Features to implement after public launch:
     `--watch` all grab fresh local data (including this collector's
     output) automatically before pushing, so a user no longer needs to
     remember a separate `collect` step before syncing from a device.
-  - **Known bug found during real usage (2026-08-04), not yet fixed**:
-    when the *same* conversation (same Anthropic-assigned UUID) is
-    collected by two different sources with different content - e.g.
-    the claude-desktop collector captures a partial/cached rendering
-    first, then a full-export re-import later brings in the complete
-    version - `store_session_with_hash()` only handles two cases
-    (identical content-hash → skip as duplicate; new id → insert). A
-    same-id-different-hash case hits a raw `sqlite3.IntegrityError:
-    UNIQUE constraint failed: sessions.id` instead of updating the
-    existing row, aborting the whole `collect` run under `--fail-fast`
-    (or silently erroring that one session under the default
-    log-and-continue mode). Worked around manually this session by hand-
-    updating the affected row's `raw_file_path`/`content_hash`/counts
-    directly via `Storage.update_session()`. **Proper fix needed**:
-    `store_session_with_hash()` (or its caller) should detect this case
-    and update the existing row in place - most likely preferring
-    whichever version has more messages/content, mirroring the
-    Last-Write-Wins-by-content-completeness logic already used
-    elsewhere (see `sync.py`'s pull-side LWW merge) - rather than
-    treating it as a hard insert failure. Affects any workflow that
-    mixes the claude-desktop collector with periodic full-export
-    re-imports, not just a one-off edge case.
+  - **Same-id-different-hash bug: FIXED (2026-08-04)**. When the *same*
+    conversation (same id) legitimately changes after first collection -
+    a live conversation that's still growing, a re-export overwriting the
+    raw file, or the claude-desktop collector catching a partial/cached
+    rendering before a later full-export brings in the complete version -
+    `store_session_with_hash()` used to only handle two cases (identical
+    content-hash → skip as duplicate; new id → insert). A
+    same-id-different-hash case hit a raw `sqlite3.IntegrityError: UNIQUE
+    constraint failed: sessions.id` instead of updating the existing row.
+    Worse, this wasn't just a noisy log line: it also meant
+    `verify_archive()`'s content-hash check could **never self-heal** -
+    the stale original hash stayed forever, so the archive stayed
+    permanently "unhealthy" no matter how many times the affected
+    session was collected, synced, or reprocessed. Found via real usage
+    (this exact session's own live transcript kept getting flagged).
+    **Fix**: `store_session_with_hash()` now detects an existing row with
+    the same id but a different hash, updates it in place (refreshing
+    `content_hash`/`title`/`updated_at`/message counts/`raw_file_path`)
+    and resets `status` to `"new"` so it flows back through the normal
+    (re)processing queue, instead of failing the insert. `run_collection()`
+    now reports an `"updated"` count alongside `"new"`. Verified against
+    the real affected sessions: `/health` went from permanently
+    `healthy: false` to `healthy: true` immediately after a normal
+    collect, with zero manual DB surgery.
 
 ## 6. Secure credential entry UI (HIGH)
 - Problem found during real end-to-end testing: `--setup`/`--join-device`/`sync`

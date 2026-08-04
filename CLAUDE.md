@@ -540,6 +540,98 @@ end-to-end with real personal data, not just tests.**
 
 ---
 
+## Session log (2026-08-04, continued — web UI audit + self-serve tooling + 2 real bugs)
+
+**Trigger: a Claude-Desktop-driven Chrome audit of the web UI (`report.md`)
+surfaced real functional bugs, not just polish.** Worked through the
+prioritized list, then added the backlog feature suggestions the user
+approved, then found and fixed two more serious bugs via actual use of
+the app (not from the report) - one of which the audit itself later
+confirmed was gone.
+
+- **Root-cause fix for the 7 unindexed sessions**: `processor.py`'s
+  `_build_narrative()` handed the model a raw, undelimited
+  `[user]/[assistant]` transcript. On certain sessions (long
+  design-planning chats, or ones ending on a casual assistant turn) the
+  model got pulled into continuing the conversation in character instead
+  of summarizing it - producing either empty output or the wrong JSON
+  entirely. Fixed by wrapping the transcript in explicit
+  `<transcript_to_analyze>` delimiters plus an explicit
+  "don't participate" instruction - and critically, truncating the raw
+  transcript *before* wrapping it, not after (an initial version of the
+  fix truncated post-wrap, silently chopping the closing instruction off
+  on long sessions). Verified against all 7 known-bad sessions before
+  reprocessing for real.
+- **Web UI fixes from the audit**: Tags filter debounce (was firing one
+  API call per keystroke), a "no strong matches" state below 20%
+  relevance instead of showing weak results as normal cards, a ⚠ badge
+  for sessions whose summary indicates failed parsing, session-modal
+  Escape/backdrop-click dismissal, a tooltip on the `archive: …` footer
+  chip surfacing real error detail, and the JSONL backup mirror actually
+  gets generated now (was built but never run) and auto-refreshes after
+  every `process` call. Two audit findings turned out to be false
+  positives on investigation, not bugs: "duplicate CDN scripts" (unpkg's
+  unversioned URLs redirect server-side, showing as two network-panel
+  entries for one script tag) and the `?`/"2. " title corruption (traced
+  to the raw exported source file itself, upstream of our pipeline,
+  before our code ever touches it - unrecoverable on our end).
+- **Backlog features shipped** (health banner, self-serve repair panel,
+  related-sessions panel, cost date-range breakdown in the UI, Lock
+  onboarding tooltip) - see README.md's "Web UI features" section and
+  server.py's `/review`, `/review/reprocess`, `/session/<id>/related`
+  endpoints for the concrete shape. Along the way, found `getHealth()`
+  was silently discarding the real error/warning payload on every
+  unhealthy check, because `/health` intentionally returns HTTP 503 and
+  the generic `request()` helper throws away the body on any non-2xx
+  response - every existing `.catch(() => null)` around it (including
+  the health badge that already existed on the Sync page) was quietly
+  getting `null` instead of real detail. Fixed centrally in `getHealth()`.
+- **Real bug #1: the sync "Working…" hang, found via the user's own
+  real click-through, not the audit.** `/sync` runs a full local
+  collection pass before ever touching credentials or Git.
+  `collect_from_claude_desktop()` was decoding *every* historical,
+  LevelDB-uncompacted version of the `react-query-cache` key - LevelDB is
+  append-only, so old overwritten versions of the same key physically
+  stick around until compaction runs - and each stale version triggered
+  an expensive failed blob lookup (~0.65s × 3000+ stale records observed
+  = 30+ minutes). Fixed by deduping to the max-`seq` (LevelDB's own write
+  sequence number) record per physical key *before* ever calling the
+  decoder - cut a real run from a 30+ minute de facto hang to under a
+  second, and fixed a correctness bug too (was reading garbage historical
+  state, not current data).
+- **Real bug #2: the permanently-stuck "unhealthy" archive status.**
+  Root-caused to the exact bug already flagged (but not yet fixed) in
+  ROADMAP.md #9: `store_session_with_hash()` had no update-in-place path
+  for a session whose content legitimately changed after first
+  collection. Every affected session's original stale content-hash stuck
+  around forever, so `verify_archive()` could never self-heal no matter
+  what got clicked - not a sync problem, not a "you need to reprocess"
+  problem, a genuine storage-layer gap. Fixed - see ROADMAP.md #9 for the
+  full writeup. Also broadened the self-serve repair panel
+  (`/review`+`/review/reprocess`) to cover both `needs_review` and plain
+  `new` sessions, since this fix's "reset to new" behavior needed a
+  self-serve path too, not just `needs_review` recovery.
+- **A `test-session-001` fixture row was found mixed into the real
+  61-session dataset** (source `claude-ai`, a fake "Debugging a Python
+  async race condition" session) - flagged to the user, deliberately not
+  touched; deleting it is their call.
+- **Verification note**: real browser testing (Playwright, headed
+  Chrome with remote debugging, since no `chromium-cli` was available in
+  this environment) was used for the sync-hang and search-freeze
+  investigations. The app's Unlock Device passphrase+TOTP gate was never
+  bypassed - for the search-freeze report, the user unlocked a visible
+  Chrome window themselves and Claude Code reconnected via CDP afterward
+  to drive the already-unlocked session, rather than being given or
+  guessing the passphrase.
+- **A reported "search freeze/hang" (Claude Desktop audit, round 3) did
+  not reproduce** under two independent real, credentialed 35-second
+  monitored test runs (continuous JS eval every second, all under 10ms,
+  zero console errors). Left unresolved/unexplained rather than
+  fabricating a fix for a bug that couldn't be found - round 4 of the
+  same audit confirmed it did not reproduce on their end either.
+
+---
+
 ## Contact & Support
 
 - **GitHub**: https://github.com/nobody174/claude-search-library

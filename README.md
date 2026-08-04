@@ -14,13 +14,14 @@ You use Claude across multiple machines (home desktop, laptop at cabin, phone, t
 
 **Claude Search Library solves this:**
 
-- 📦 **Collect** — Gather chats from Claude.ai, VS Code, Cowork, local folders
+- 📦 **Collect** — Gather chats from Claude.ai, Claude Code, Claude desktop app, Cowork, local folders
 - 🧠 **Summarize** — Claude API extracts learnings, patterns, reusable workflows
 - 🔍 **Search** — Semantic (finds by meaning) + keyword (FTS5, finds by exact words) hybrid search
 - 🌍 **Sync** — Multi-device sync via encrypted GitHub private repo
 - 🔒 **Encrypt** — Master passphrase + Google Authenticator 2FA
 - 📱 **Access** — Search from desktop, laptop, phone (React web UI)
 - 🔌 **Offline** — Works completely offline, syncs when internet returns
+- 🩺 **Self-healing** — Web UI surfaces archive health directly and can repair/reprocess failed or pending sessions with one click, no CLI needed
 - ✅ **Test** — 202 Python + 10 Node tests, production-ready
 
 ## Quick Start
@@ -149,6 +150,16 @@ python3 server.py --port 7654
 curl "http://localhost:7654/search?q=minecraft&mode=hybrid" | jq
 curl http://localhost:7654/stats | jq
 curl http://localhost:7654/health | jq
+
+# Self-serve repair: list sessions stuck in needs_review or new, then
+# reprocess one or all of them (same code path as `cli.py process`)
+curl http://localhost:7654/review | jq
+curl -X POST http://localhost:7654/review/reprocess -d '{}' | jq
+
+# Sessions related by shared tags, and API spend for a specific month/quarter
+curl http://localhost:7654/session/SESSION_ID/related | jq
+curl "http://localhost:7654/costs?month=2026-08" | jq
+curl "http://localhost:7654/costs?quarter=2026-Q3" | jq
 ```
 
 ## Architecture
