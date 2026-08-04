@@ -7,6 +7,7 @@ on timestamp, delegated to cr-sqlite where available (see storage.py).
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import socket
@@ -18,7 +19,7 @@ from typing import Optional
 from git import GitCommandError, InvalidGitRepositoryError, Repo
 
 from src import crypto
-from src.storage import Storage
+from src.storage import CR_SQLITE_CRR_TABLES, Storage
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +27,42 @@ LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "sync.log"
 DEFAULT_REPO_PATH = Path.home() / ".claude-search-library" / "repo"
 DEFAULT_SYNC_INTERVAL_SECONDS = 300
 
-ENCRYPTED_SESSIONS_DIR = "encrypted_sessions"
-ENCRYPTED_SUMMARIES_DIR = "encrypted_summaries"
 ENCRYPTED_RAW_CHATS_DIR = "encrypted_raw_chats"
 SECRETS_FILENAME = "secrets.enc"
 SYNC_METADATA_FILENAME = "sync_metadata.json"
 
-# Session fields that are meaningful across devices. raw_file_path and
-# summary_file_path are deliberately excluded - they're local filesystem
-# paths on the pushing device and would be both meaningless and potentially
-# identity-leaking (local username, directory layout) on another device.
-SYNCED_SESSION_FIELDS = [
-    "id", "source", "device", "title", "created_at", "updated_at",
-    "duration_seconds", "message_count", "user_message_count",
-    "assistant_message_count", "content_hash", "status",
-]
+# cr-sqlite changeset transport, replacing ENCRYPTED_SESSIONS_DIR/
+# ENCRYPTED_SUMMARIES_DIR's whole-row-per-file model for the two CRR
+# tables (sessions, summaries - see storage.CR_SQLITE_CRR_TABLES). One
+# encrypted file per push, named by the crsql db_version it covers,
+# under a per-device subdirectory so devices never collide on filenames.
+# Applying a changeset is idempotent (that's the whole point of a CRDT),
+# so pull just re-applies every changeset file from every other device on
+# every pull rather than tracking a per-file "already applied" watermark -
+# simpler and safe at this project's scale (dozens-hundreds of files).
+CHANGESETS_DIR = "changesets"
+_CRSQL_CHANGES_COLUMNS = ["table", "pk", "cid", "val", "col_version", "db_version", "site_id", "cl", "seq"]
+_CRSQL_CHANGES_COLUMNS_SQL = ",".join(f'"{c}"' for c in _CRSQL_CHANGES_COLUMNS)
+
+
+def _encode_changeset_row(row: dict) -> dict:
+    """crsql_changes' pk/site_id columns are raw bytes; val's type follows
+    the changed column's own affinity (TEXT/INTEGER/REAL/NULL/bytes).
+    JSON can't represent bytes directly, so wrap any bytes value with a
+    marker dict instead of blanket base64-encoding every field (which
+    would also mangle real int/str/float values)."""
+
+    def encode(v):
+        return {"__b64__": base64.b64encode(v).decode("ascii")} if isinstance(v, bytes) else v
+
+    return {k: encode(row[k]) for k in _CRSQL_CHANGES_COLUMNS}
+
+
+def _decode_changeset_row(row: dict) -> tuple:
+    def decode(v):
+        return base64.b64decode(v["__b64__"]) if isinstance(v, dict) and "__b64__" in v else v
+
+    return tuple(decode(row[k]) for k in _CRSQL_CHANGES_COLUMNS)
 
 
 def _setup_file_logging() -> None:
@@ -79,7 +101,10 @@ def _write_sync_metadata(repo_path: Path, metadata: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def _update_device_metadata(repo_path: Path, pending_changes: int = 0, bump_push_checkpoint: bool = False) -> None:
+def _update_device_metadata(
+    repo_path: Path, pending_changes: int = 0, bump_push_checkpoint: bool = False,
+    last_pushed_db_version: Optional[int] = None,
+) -> None:
     """Update this device's sync_metadata.json entry.
 
     `last_sync_at`/`last_heartbeat` reflect "last time this device did any
@@ -94,6 +119,12 @@ def _update_device_metadata(repo_path: Path, pending_changes: int = 0, bump_push
     happened) — silently skipping the push. `last_push_at` is a separate
     checkpoint, bumped only when bump_push_checkpoint=True (i.e. from
     push_to_github after a successful push), so pulling never resets it.
+
+    `last_pushed_db_version` is this device's own crsql_db_version()
+    watermark - the cr-sqlite changeset transport's equivalent of
+    `last_push_at`, letting push_to_github() ask "what's changed locally
+    since I last pushed?" without re-sending already-pushed changesets.
+    Only updated when explicitly passed (mirrors bump_push_checkpoint).
     """
     metadata = _read_sync_metadata(repo_path)
     now = datetime.now(timezone.utc).isoformat()
@@ -105,6 +136,10 @@ def _update_device_metadata(repo_path: Path, pending_changes: int = 0, bump_push
         "last_heartbeat": now,
         "pending_changes": pending_changes,
         "last_push_at": now if bump_push_checkpoint else existing.get("last_push_at"),
+        "last_pushed_db_version": (
+            last_pushed_db_version if last_pushed_db_version is not None
+            else existing.get("last_pushed_db_version", 0)
+        ),
     }
     metadata["devices"][device_id] = entry
     _write_sync_metadata(repo_path, metadata)
@@ -190,55 +225,56 @@ class SyncWorker:
         return len(changed)
 
     def push_to_github(self) -> dict:
-        """Encrypt and push changed sessions/summaries to the GitHub repo.
+        """Push local changes to the GitHub repo: a cr-sqlite changeset file
+        covering sessions+summaries (real per-column CRDT merge on pull -
+        see storage.CR_SQLITE_CRR_TABLES), plus raw chat files for any
+        session that changed.
 
-        Selection is per-session (sessions.synced_at), not a device-level
-        "last push" checkpoint compared against each session's own content
-        timestamp - see check_for_changes()'s docstring for why that's
-        wrong (it silently drops any newly-imported session whose content
-        predates this device's checkpoint, e.g. bulk historical imports).
+        Raw-file selection still uses the original per-session
+        (sessions.synced_at) check - see check_for_changes()'s docstring
+        for why a single device-level checkpoint compared against each
+        session's own content timestamp is wrong (it silently drops any
+        newly-imported session whose content predates this device's
+        checkpoint, e.g. bulk historical imports). The changeset itself
+        uses its own, separate watermark (last_pushed_db_version) since
+        crsql_db_version() is a whole-database counter, not per-session.
         """
         _setup_file_logging()
         repo = _open_repo(self.repo_path)
         device_id = _device_id()
 
-        sessions_dir = self.repo_path / ENCRYPTED_SESSIONS_DIR
-        summaries_dir = self.repo_path / ENCRYPTED_SUMMARIES_DIR
+        changesets_dir = self.repo_path / CHANGESETS_DIR / device_id
         raw_dir = self.repo_path / ENCRYPTED_RAW_CHATS_DIR
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        summaries_dir.mkdir(parents=True, exist_ok=True)
+        changesets_dir.mkdir(parents=True, exist_ok=True)
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         files_changed = []
         now = datetime.now(timezone.utc).isoformat()
         with Storage(self.db_path) as db:
+            metadata = _read_sync_metadata(self.repo_path)
+            last_pushed = metadata.get("devices", {}).get(device_id, {}).get("last_pushed_db_version", 0)
+
+            rows = db.conn.execute(
+                f'SELECT {_CRSQL_CHANGES_COLUMNS_SQL} FROM crsql_changes '
+                f'WHERE db_version > ? AND site_id = crsql_site_id()',
+                (last_pushed,),
+            ).fetchall()
+
+            new_last_pushed = last_pushed
+            if rows:
+                new_last_pushed = max(r["db_version"] for r in rows)
+                changeset = [_encode_changeset_row(dict(r)) for r in rows]
+                blob = crypto.encrypt_data(json.dumps(changeset).encode("utf-8"), self.encryption_key)
+                changeset_path = changesets_dir / f"{new_last_pushed}.enc"
+                changeset_path.write_text(blob, encoding="utf-8")
+                files_changed.append(str(changeset_path.relative_to(self.repo_path)))
+
             sessions = db.get_all_sessions()
             for session in sessions:
                 synced_at = session.get("synced_at")
                 updated = session.get("updated_at") or session.get("created_at") or ""
                 if synced_at and updated <= synced_at:
                     continue
-
-                # Session metadata must be pushed too, not just the summary:
-                # a fresh device pulling a summary for a session it has
-                # never heard of would otherwise hit summaries.session_id's
-                # foreign key to sessions.id and fail outright.
-                session_fields = {k: session.get(k) for k in SYNCED_SESSION_FIELDS}
-                blob = crypto.encrypt_data(
-                    json.dumps(session_fields).encode("utf-8"), self.encryption_key
-                )
-                session_path = sessions_dir / f"{session['id']}_session.enc"
-                session_path.write_text(blob, encoding="utf-8")
-                files_changed.append(str(session_path.relative_to(self.repo_path)))
-
-                summary = db.get_summary(session["id"])
-                if summary is not None:
-                    blob = crypto.encrypt_data(
-                        json.dumps(summary).encode("utf-8"), self.encryption_key
-                    )
-                    summary_path = summaries_dir / f"{session['id']}_summary.enc"
-                    summary_path.write_text(blob, encoding="utf-8")
-                    files_changed.append(str(summary_path.relative_to(self.repo_path)))
 
                 raw_path = session.get("raw_file_path")
                 if raw_path and Path(raw_path).exists():
@@ -248,12 +284,20 @@ class SyncWorker:
                     raw_out_path.write_text(blob, encoding="utf-8")
                     files_changed.append(str(raw_out_path.relative_to(self.repo_path)))
 
+                # synced_at/sync_version are local device bookkeeping, not
+                # meaningful synced content - writing them to a CRR table
+                # does generate a small extra changeset entry each push,
+                # which is harmless noise at this project's scale (not
+                # worth splitting into a separate local-only table yet).
                 db.update_session(session["id"], {
                     "synced_at": now,
                     "sync_version": (session.get("sync_version") or 1) + 1,
                 })
 
-        _update_device_metadata(self.repo_path, pending_changes=0, bump_push_checkpoint=True)
+        _update_device_metadata(
+            self.repo_path, pending_changes=0, bump_push_checkpoint=True,
+            last_pushed_db_version=new_last_pushed,
+        )
 
         if files_changed:
             repo.index.add(files_changed + [SYNC_METADATA_FILENAME])
@@ -264,9 +308,31 @@ class SyncWorker:
         return {"direction": "push", "files_changed": len(files_changed), "conflicts": 0}
 
     def pull_from_github(self) -> dict:
-        """Pull latest encrypted data from GitHub, decrypt, and merge locally."""
+        """Pull latest encrypted data from GitHub, decrypt, and merge locally.
+
+        sessions/summaries arrive as cr-sqlite changesets (see
+        CHANGESETS_DIR) - applying one is `INSERT INTO crsql_changes`,
+        which is where the real per-column CRDT merge happens (two
+        devices editing different fields of the same session both survive
+        - see storage.CR_SQLITE_CRR_TABLES). This replaces the old
+        whole-row-file + hand-written Last-Write-Wins comparison.
+        """
         _setup_file_logging()
         repo = _open_repo(self.repo_path)
+
+        # _update_device_metadata() (below, and at the end of this method)
+        # writes SYNC_METADATA_FILENAME straight to the working tree without
+        # committing it - harmless if a push follows immediately (push
+        # commits it as part of its own commit), but calling pull twice
+        # in a row with no intervening push - e.g. `cli.py sync --pull`
+        # used repeatedly, or this device just wants a fresh read - leaves
+        # a real uncommitted change that makes a plain `git pull` fail
+        # outright ("local changes would be overwritten by merge"). Safe
+        # to discard: it's pure local bookkeeping about to be rewritten by
+        # this same pull's own _update_device_metadata() call anyway.
+        metadata_path = self.repo_path / SYNC_METADATA_FILENAME
+        if metadata_path.exists() and repo.is_dirty(path=SYNC_METADATA_FILENAME):
+            repo.git.checkout("--", SYNC_METADATA_FILENAME)
 
         try:
             repo.remote(name="origin").pull()
@@ -274,63 +340,40 @@ class SyncWorker:
             logger.error("pull failed: %s", e)
             raise
 
-        sessions_dir = self.repo_path / ENCRYPTED_SESSIONS_DIR
-        summaries_dir = self.repo_path / ENCRYPTED_SUMMARIES_DIR
+        changesets_root = self.repo_path / CHANGESETS_DIR
+        device_id = _device_id()
         files_changed = 0
-        conflicts = 0
+        rows_applied = 0
+        conflicts = 0  # CRDT merge auto-resolves everything; nothing gets rejected.
 
         with Storage(self.db_path) as db:
-            # Sessions must land before summaries: summaries.session_id has
-            # a foreign key to sessions.id, so pulling a summary for a
-            # session this device has never seen (a fresh/second device,
-            # or one that pulls before it has locally collected anything)
-            # would otherwise fail outright.
-            for enc_path in sorted(sessions_dir.glob("*_session.enc")) if sessions_dir.exists() else []:
-                session_id = enc_path.stem.replace("_session", "")
-                try:
-                    decrypted = crypto.decrypt_data(enc_path.read_text(encoding="utf-8"), self.encryption_key)
-                    incoming_session = json.loads(decrypted)
-                except Exception as e:
-                    logger.error("failed to decrypt/parse %s: %s", enc_path, e)
-                    continue
+            # Every other device's changeset files, oldest device-dir first
+            # for determinism. Re-applying an already-applied changeset is
+            # a safe no-op (idempotent by construction), so no per-file
+            # "already applied" tracking is needed - see CHANGESETS_DIR's
+            # module comment for why that's an acceptable tradeoff here.
+            other_device_dirs = (
+                sorted(d for d in changesets_root.iterdir() if d.is_dir() and d.name != device_id)
+                if changesets_root.exists() else []
+            )
+            for device_dir in other_device_dirs:
+                for enc_path in sorted(device_dir.glob("*.enc"), key=lambda p: int(p.stem)):
+                    try:
+                        decrypted = crypto.decrypt_data(enc_path.read_text(encoding="utf-8"), self.encryption_key)
+                        changeset = json.loads(decrypted)
+                    except Exception as e:
+                        logger.error("failed to decrypt/parse %s: %s", enc_path, e)
+                        continue
 
-                existing = db.get_session(session_id)
-                if existing is None:
-                    db.insert_session(incoming_session)
-                else:
-                    # Last-Write-Wins on timestamp; cr-sqlite (when loaded, see
-                    # storage.init_db) handles this natively on real CRDT tables.
-                    # This is the plain-SQLite fallback merge policy.
-                    incoming_ts = incoming_session.get("updated_at") or incoming_session.get("created_at") or ""
-                    existing_ts = existing.get("updated_at") or existing.get("created_at") or ""
-                    if incoming_ts > existing_ts:
-                        db.update_session(session_id, incoming_session)
-
-            for enc_path in sorted(summaries_dir.glob("*_summary.enc")) if summaries_dir.exists() else []:
-                session_id = enc_path.stem.replace("_summary", "")
-                try:
-                    decrypted = crypto.decrypt_data(enc_path.read_text(encoding="utf-8"), self.encryption_key)
-                    summary = json.loads(decrypted)
-                except Exception as e:
-                    logger.error("failed to decrypt/parse %s: %s", enc_path, e)
-                    continue
-
-                if db.get_session(session_id) is None:
-                    # No matching *_session.enc was pulled for this summary
-                    # (e.g. partial/corrupted push) - skip rather than
-                    # hitting the foreign key constraint.
-                    logger.warning("skipping summary for unknown session %s (no session record found)", session_id)
-                    conflicts += 1
-                    continue
-
-                existing = db.get_session(session_id)
-                incoming_ts = summary.get("created_at", "")
-                existing_ts = existing.get("updated_at") or existing.get("created_at") or ""
-                if incoming_ts and incoming_ts <= existing_ts and db.get_summary(session_id) is not None:
-                    conflicts += 1
-                    continue
-                db.store_summary(session_id, summary)
-                files_changed += 1
+                    for row in changeset:
+                        db.conn.execute(
+                            f'INSERT INTO crsql_changes ({_CRSQL_CHANGES_COLUMNS_SQL}) '
+                            f'VALUES (?,?,?,?,?,?,?,?,?)',
+                            _decode_changeset_row(row),
+                        )
+                        rows_applied += 1
+                    files_changed += 1
+            db.conn.commit()
 
         _update_device_metadata(self.repo_path, pending_changes=0)
 
@@ -357,11 +400,11 @@ class SyncWorker:
                 logger.warning("Failed to rebuild search_index/FTS5 after pull: %s", e)
 
         logger.info(
-            "pull complete: files_changed=%d conflicts=%d reindexed=%d",
-            files_changed, conflicts, reindexed,
+            "pull complete: files_changed=%d rows_applied=%d conflicts=%d reindexed=%d",
+            files_changed, rows_applied, conflicts, reindexed,
         )
         return {
-            "direction": "pull", "files_changed": files_changed,
+            "direction": "pull", "files_changed": files_changed, "rows_applied": rows_applied,
             "conflicts": conflicts, "reindexed": reindexed,
         }
 

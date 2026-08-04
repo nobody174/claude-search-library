@@ -27,11 +27,16 @@ SCHEMA_VERSION = 1
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,
+    -- source/created_at keep NOT NULL (the app always provides real values
+    -- for both - see collector.py) but need a DEFAULT anyway: cr-sqlite
+    -- requires every NOT NULL column on a CRR table to have one, for
+    -- forwards/backwards schema compatibility across devices that might be
+    -- on slightly different app versions.
+    id TEXT NOT NULL PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'unknown',
     device TEXT,
     title TEXT,
-    created_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT,
     duration_seconds INTEGER,
     message_count INTEGER,
@@ -39,7 +44,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     assistant_message_count INTEGER,
     raw_file_path TEXT,
     summary_file_path TEXT,
-    content_hash TEXT UNIQUE,
+    -- Not UNIQUE at the DB level: cr-sqlite disallows any unique index
+    -- besides the primary key on a CRR table (independent devices can't
+    -- consistently enforce cross-device uniqueness). Duplicate detection
+    -- is already done in application code before every insert - see
+    -- Storage.check_duplicate()/store_session_with_hash().
+    content_hash TEXT,
     processed_at TEXT,
     status TEXT DEFAULT 'processed',
     review_reason TEXT,
@@ -50,12 +60,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_content_hash ON sessions(content_hash);
 
+-- session_id intentionally has no REFERENCES/FK constraint: cr-sqlite
+-- disallows *checked* foreign keys on CRR (CRDT) tables, since replicated
+-- changesets can legitimately arrive out of order (a summary's changeset
+-- reaching a device before its session's changeset does) - see
+-- crsql_as_crr()'s own error message. Referential integrity for this
+-- relationship is enforced at the application layer instead (callers
+-- already check get_session() before trusting a summary).
 CREATE TABLE IF NOT EXISTS summaries (
-    session_id TEXT PRIMARY KEY REFERENCES sessions(id),
-    tldr TEXT NOT NULL,
-    learnings TEXT NOT NULL,
-    patterns TEXT NOT NULL,
+    session_id TEXT NOT NULL PRIMARY KEY,
+    tldr TEXT NOT NULL DEFAULT '',
+    learnings TEXT NOT NULL DEFAULT '[]',
+    patterns TEXT NOT NULL DEFAULT '[]',
     tags TEXT,
     mentioned_tools TEXT,
     mentioned_languages TEXT,
@@ -125,11 +143,22 @@ SUMMARY_JSON_FIELDS = {"learnings", "patterns", "tags", "mentioned_tools", "ment
 _local = threading.local()
 
 
+CR_SQLITE_CRR_TABLES = ("sessions", "summaries")
+
+# Vendored per-platform binary, not a pip package - cr-sqlite ships prebuilt
+# native extensions per OS/arch (see https://github.com/vlcn-io/cr-sqlite/releases),
+# not something `pip install` can provide. Loading by bare name ("crsqlite")
+# depends on the OS's shared-library search path/cwd, which is unreliable
+# across how this app gets launched (CLI, server.py, tests) - load by
+# explicit path instead so it works regardless of cwd.
+_CR_SQLITE_EXTENSION_PATH = Path(__file__).resolve().parent.parent / "vendor" / "cr-sqlite" / "crsqlite"
+
+
 def _try_load_cr_sqlite(conn: sqlite3.Connection) -> bool:
     """Best-effort load of the cr-sqlite extension. Returns True if loaded."""
     try:
         conn.enable_load_extension(True)
-        conn.load_extension("crsqlite")
+        conn.load_extension(str(_CR_SQLITE_EXTENSION_PATH))
         conn.enable_load_extension(False)
         return True
     except (sqlite3.OperationalError, AttributeError) as e:
@@ -183,8 +212,11 @@ def init_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    _try_load_cr_sqlite(conn)
+    cr_sqlite_loaded = _try_load_cr_sqlite(conn)
     conn.executescript(_SCHEMA)
+    if cr_sqlite_loaded:
+        for table in CR_SQLITE_CRR_TABLES:
+            conn.execute(f"SELECT crsql_as_crr('{table}')")
     conn.commit()
     _run_schema_upgrades(conn)
     return conn

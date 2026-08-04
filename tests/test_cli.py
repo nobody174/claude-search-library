@@ -168,6 +168,9 @@ def test_process_command_runs_batch(runner, monkeypatch):
         def get_all_sessions(self):
             return [{"id": "s1", "status": "new"}, {"id": "s2", "status": "processed"}]
 
+        def export_summaries_to_jsonl(self):
+            return 0
+
     monkeypatch.setattr("src.storage.Storage", lambda *a, **kw: FakeStorage())
 
     captured = {}

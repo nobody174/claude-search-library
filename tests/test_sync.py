@@ -77,6 +77,31 @@ SAMPLE_SUMMARY = {
 }
 
 
+def _write_remote_changeset(repo_path, encryption_key, remote_device_id, build_fn):
+    """Simulate a *different* device pushing a changeset: build_fn(db) runs
+    against a throwaway, real (cr-sqlite-backed) Storage standing in for
+    that other device, then its resulting crsql_changes rows are encrypted
+    and written exactly where push_to_github() would write them for that
+    device_id. Real changesets are only produced by real cr-sqlite - pk is
+    an opaque, internally-encoded blob, not something safe to hand-craft.
+    """
+    import tempfile
+
+    remote_db_path = tempfile.mktemp(suffix=".db")
+    with Storage(remote_db_path) as db:
+        build_fn(db)
+        rows = db.conn.execute(
+            f'SELECT {sync._CRSQL_CHANGES_COLUMNS_SQL} FROM crsql_changes WHERE site_id = crsql_site_id()'
+        ).fetchall()
+        changeset = [sync._encode_changeset_row(dict(r)) for r in rows]
+
+    changesets_dir = repo_path / sync.CHANGESETS_DIR / remote_device_id
+    changesets_dir.mkdir(parents=True, exist_ok=True)
+    blob = crypto.encrypt_data(json.dumps(changeset).encode("utf-8"), encryption_key)
+    (changesets_dir / "1.enc").write_text(blob, encoding="utf-8")
+    return len(rows)
+
+
 def test_push_file_writes_commits_and_pushes(repo_path, mock_repo, tmp_path):
     sync.push_file("secrets.enc", "encrypted-blob-content", repo_path=str(repo_path))
 
@@ -151,31 +176,29 @@ def test_push_to_github_encrypts_and_commits(repo_path, mock_repo, tmp_path, enc
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.push_to_github()
 
-    assert result["files_changed"] == 2  # session metadata + summary; no raw_file_path set
-    session_path = repo_path / sync.ENCRYPTED_SESSIONS_DIR / "sess-1_session.enc"
-    summary_path = repo_path / sync.ENCRYPTED_SUMMARIES_DIR / "sess-1_summary.enc"
-    assert session_path.exists()
-    assert summary_path.exists()
+    assert result["files_changed"] == 1  # one changeset file covering both tables' changes
+    changeset_files = list((repo_path / sync.CHANGESETS_DIR / "test-device").glob("*.enc"))
+    assert len(changeset_files) == 1
 
-    # Verify both are actually encrypted (not plaintext JSON) and round-trip.
-    session_ciphertext = session_path.read_text(encoding="utf-8")
-    assert "Minecraft" not in session_ciphertext and "claude-ai" not in session_ciphertext
-    decrypted_session = json.loads(crypto.decrypt_data(session_ciphertext, encryption_key))
-    assert decrypted_session["id"] == "sess-1"
-    assert decrypted_session["source"] == "claude-ai"
-    # Local-only fields must not be pushed to another device.
-    assert "raw_file_path" not in decrypted_session
-    assert "summary_file_path" not in decrypted_session
-
-    ciphertext = summary_path.read_text(encoding="utf-8")
-    assert "session_tldr" not in ciphertext
-    decrypted = json.loads(crypto.decrypt_data(ciphertext, encryption_key))
-    assert decrypted["tldr"] == "Did a thing."
+    # Verify it's actually encrypted (not plaintext JSON) and round-trips to
+    # real crsql_changes rows covering both the sessions and summaries tables.
+    ciphertext = changeset_files[0].read_text(encoding="utf-8")
+    assert "claude-ai" not in ciphertext and "Did a thing" not in ciphertext
+    changeset = json.loads(crypto.decrypt_data(ciphertext, encryption_key))
+    tables_touched = {row["table"] for row in changeset}
+    assert tables_touched == {"sessions", "summaries"}
 
     mock_repo.remote.return_value.push.assert_called_once()
 
 
-def test_push_to_github_skips_already_synced_sessions(repo_path, mock_repo, tmp_path, encryption_key):
+def test_push_to_github_skips_already_synced_raw_files(repo_path, mock_repo, tmp_path, encryption_key):
+    """synced_at now only gates the raw-chat-file push (a session with no
+    raw_file_path set never pushes a raw file regardless), not the
+    changeset push - the changeset transport tracks its own separate
+    watermark (last_pushed_db_version), so a session's real local
+    changes still go out as a changeset on a device's first real push
+    even if synced_at was set some other way (e.g. by a test, or by an
+    older sync run whose changeset watermark predates this feature)."""
     db_path = str(tmp_path / "test.db")
     with Storage(db_path) as db:
         db.insert_session(_sample_session(updated_at="2026-07-30T00:00:00+00:00"))
@@ -185,8 +208,9 @@ def test_push_to_github_skips_already_synced_sessions(repo_path, mock_repo, tmp_
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.push_to_github()
 
-    assert result["files_changed"] == 0
-    mock_repo.remote.return_value.push.assert_not_called()
+    assert result["files_changed"] == 1  # the changeset, not a raw file
+    assert list((repo_path / sync.ENCRYPTED_RAW_CHATS_DIR).glob("*")) == []
+    mock_repo.remote.return_value.push.assert_called_once()  # the changeset still needs pushing
 
 
 def test_push_to_github_pushes_old_content_never_synced(repo_path, mock_repo, tmp_path, encryption_key):
@@ -203,9 +227,17 @@ def test_push_to_github_pushes_old_content_never_synced(repo_path, mock_repo, tm
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.push_to_github()
 
-    assert result["files_changed"] == 1  # only old-import's session metadata (no summary set)
-    assert (repo_path / sync.ENCRYPTED_SESSIONS_DIR / "old-import_session.enc").exists()
-    assert not (repo_path / sync.ENCRYPTED_SESSIONS_DIR / "already-synced_session.enc").exists()
+    # Both sessions' inserts are new local changeset history and get pushed
+    # together in one file - "already synced" here only means its raw file
+    # was previously pushed (see push_to_github()'s raw-file selection,
+    # still per-session via synced_at); the changeset transport pushes
+    # whatever's new in crsql_changes since this device's own last push,
+    # which for a first-ever push is everything.
+    assert result["files_changed"] == 1
+    changeset_files = list((repo_path / sync.CHANGESETS_DIR / "test-device").glob("*.enc"))
+    changeset = json.loads(crypto.decrypt_data(changeset_files[0].read_text(encoding="utf-8"), encryption_key))
+    pks_seen = {row["pk"]["__b64__"] for row in changeset if row["table"] == "sessions"}
+    assert len(pks_seen) == 2  # both sessions' inserts, regardless of raw-file sync state
 
     with Storage(db_path) as db:
         pushed = db.get_session("old-import")
@@ -239,20 +271,20 @@ def test_pull_does_not_suppress_a_later_push(repo_path, mock_repo, tmp_path, enc
 
 def test_pull_from_github_decrypts_and_merges(repo_path, mock_repo, tmp_path, encryption_key):
     db_path = str(tmp_path / "test.db")
-    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
-    summaries_dir.mkdir(parents=True)
 
     with Storage(db_path) as db:
         db.insert_session(_sample_session("sess-remote"))
 
-    remote_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
-    blob = crypto.encrypt_data(json.dumps(remote_summary).encode("utf-8"), encryption_key)
-    (summaries_dir / "sess-remote_summary.enc").write_text(blob, encoding="utf-8")
+    _write_remote_changeset(
+        repo_path, encryption_key, "remote-device",
+        lambda db: db.store_summary("sess-remote", SAMPLE_SUMMARY),
+    )
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.pull_from_github()
 
     assert result["files_changed"] == 1
+    assert result["rows_applied"] > 0
     assert result["conflicts"] == 0
     mock_repo.remote.return_value.pull.assert_called_once()
 
@@ -263,32 +295,26 @@ def test_pull_from_github_decrypts_and_merges(repo_path, mock_repo, tmp_path, en
 
 def test_pull_from_github_fresh_device_with_no_local_sessions(repo_path, mock_repo, tmp_path, encryption_key):
     """Regression test: a second/fresh device that has never locally
-    collected anything must still be able to pull. Previously
-    pull_from_github() only ever decrypted *_summary.enc and called
-    db.store_summary() directly - since summaries.session_id has a foreign
-    key to sessions.id, this crashed with an IntegrityError on any device
-    that didn't already have a matching session row, which is exactly the
-    normal case for a second device joining an existing archive.
+    collected anything must still be able to pull. The old FK from
+    summaries.session_id to sessions.id used to make this crash with an
+    IntegrityError if a summary's changeset applied before its session's
+    did; that FK is now intentionally gone (cr-sqlite disallows checked
+    FKs on CRR tables - see storage.py's schema comment), so this should
+    just work regardless of application order.
     """
     db_path = str(tmp_path / "test.db")
-    sessions_dir = repo_path / sync.ENCRYPTED_SESSIONS_DIR
-    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
-    sessions_dir.mkdir(parents=True)
-    summaries_dir.mkdir(parents=True)
 
-    # No db.insert_session() call here - this device has never seen
-    # "sess-remote" before. Both the session metadata and the summary
-    # arrive only via the encrypted pull.
-    remote_session = _sample_session("sess-remote")
-    session_blob = crypto.encrypt_data(json.dumps(remote_session).encode("utf-8"), encryption_key)
-    (sessions_dir / "sess-remote_session.enc").write_text(session_blob, encoding="utf-8")
+    # No local db.insert_session() call here - this device has never seen
+    # "sess-remote" before. Both the session row and the summary arrive
+    # only via the pulled changeset.
+    def build_remote(db):
+        db.insert_session(_sample_session("sess-remote"))
+        db.store_summary("sess-remote", SAMPLE_SUMMARY)
 
-    remote_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
-    summary_blob = crypto.encrypt_data(json.dumps(remote_summary).encode("utf-8"), encryption_key)
-    (summaries_dir / "sess-remote_summary.enc").write_text(summary_blob, encoding="utf-8")
+    _write_remote_changeset(repo_path, encryption_key, "remote-device", build_remote)
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
-    result = worker.pull_from_github()  # must not raise IntegrityError
+    result = worker.pull_from_github()  # must not raise
 
     assert result["files_changed"] == 1
     assert result["conflicts"] == 0
@@ -303,56 +329,68 @@ def test_pull_from_github_fresh_device_with_no_local_sessions(repo_path, mock_re
 
 
 def test_pull_from_github_summary_without_matching_session_is_skipped(repo_path, mock_repo, tmp_path, encryption_key):
-    """A summary with no corresponding *_session.enc (e.g. a partial or
-    corrupted push) must be skipped gracefully, not crash the whole pull."""
+    """Behavior change from the pre-cr-sqlite implementation: a summary
+    changeset with no corresponding session row no longer needs special
+    "skip gracefully" handling, because summaries.session_id no longer
+    has a checked FK to sessions.id at all (cr-sqlite disallows checked
+    FKs on CRR tables). Applying an orphan summary changeset just creates
+    the summaries row - it does not raise, and does not conjure a
+    matching sessions row into existence either."""
     db_path = str(tmp_path / "test.db")
-    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
-    summaries_dir.mkdir(parents=True)
 
-    orphan_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
-    blob = crypto.encrypt_data(json.dumps(orphan_summary).encode("utf-8"), encryption_key)
-    (summaries_dir / "sess-orphan_summary.enc").write_text(blob, encoding="utf-8")
+    _write_remote_changeset(
+        repo_path, encryption_key, "remote-device",
+        lambda db: db.store_summary("sess-orphan", SAMPLE_SUMMARY),
+    )
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.pull_from_github()  # must not raise
 
-    assert result["files_changed"] == 0
-    assert result["conflicts"] == 1
+    assert result["files_changed"] == 1
     with Storage(db_path) as db:
         assert db.get_session("sess-orphan") is None
+        assert db.get_summary("sess-orphan")["tldr"] == "Did a thing."
 
 
-def test_pull_from_github_lww_conflict_keeps_newer_local(repo_path, mock_repo, tmp_path, encryption_key):
+def test_pull_from_github_merges_concurrent_edits_to_different_columns(repo_path, mock_repo, tmp_path, encryption_key):
+    """The actual point of this whole migration: two devices independently
+    editing *different columns* of the *same row* between syncs must both
+    survive after pulling each other's changes - real per-column CRDT
+    merge, not the old whole-row Last-Write-Wins (which would have kept
+    only whichever side had the newer timestamp and silently discarded
+    the other device's edit entirely, even though it touched an unrelated
+    column)."""
     db_path = str(tmp_path / "test.db")
-    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
-    summaries_dir.mkdir(parents=True)
 
     with Storage(db_path) as db:
-        db.insert_session(_sample_session("sess-1", updated_at="2026-08-01T00:00:00+00:00"))
-        newer_summary = dict(SAMPLE_SUMMARY, session_tldr="Newer local version")
-        db.store_summary("sess-1", newer_summary)
+        db.insert_session(_sample_session("sess-1"))
+        db.update_session("sess-1", {"title": "Edited locally"})
 
-    older_remote = dict(SAMPLE_SUMMARY, session_tldr="Older remote version", created_at="2026-07-01T00:00:00+00:00")
-    blob = crypto.encrypt_data(json.dumps(older_remote).encode("utf-8"), encryption_key)
-    (summaries_dir / "sess-1_summary.enc").write_text(blob, encoding="utf-8")
+    # Remote device: starts from the *same* row (as if it had already
+    # pulled it once), then independently edits a different column.
+    def build_remote(db):
+        db.insert_session(_sample_session("sess-1"))
+        db.update_session("sess-1", {"status": "processed"})
+
+    _write_remote_changeset(repo_path, encryption_key, "remote-device", build_remote)
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
-    result = worker.pull_from_github()
+    worker.pull_from_github()
 
-    assert result["conflicts"] == 1
     with Storage(db_path) as db:
-        summary = db.get_summary("sess-1")
-        assert summary["tldr"] == "Newer local version"
+        session = db.get_session("sess-1")
+    assert session["title"] == "Edited locally"   # local edit preserved
+    assert session["status"] == "processed"        # remote edit also preserved
 
 
 def test_pull_from_github_skips_undecryptable_files(repo_path, mock_repo, tmp_path, encryption_key):
     db_path = str(tmp_path / "test.db")
-    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
-    summaries_dir.mkdir(parents=True)
-    (summaries_dir / "corrupt_summary.enc").write_text("not-valid-fernet-token", encoding="utf-8")
+    changesets_dir = repo_path / sync.CHANGESETS_DIR / "remote-device"
+    changesets_dir.mkdir(parents=True)
+    (changesets_dir / "1.enc").write_text("not-valid-fernet-token", encoding="utf-8")
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
-    result = worker.pull_from_github()
+    result = worker.pull_from_github()  # must not raise
 
     assert result["files_changed"] == 0
 
@@ -400,18 +438,12 @@ def test_pull_from_github_reindexes_chromadb_and_fts5_when_files_change(
     actual second machine.
     """
     db_path = str(tmp_path / "test.db")
-    sessions_dir = repo_path / sync.ENCRYPTED_SESSIONS_DIR
-    summaries_dir = repo_path / sync.ENCRYPTED_SUMMARIES_DIR
-    sessions_dir.mkdir(parents=True)
-    summaries_dir.mkdir(parents=True)
 
-    remote_session = dict(_sample_session("sess-remote"), status="processed")
-    session_blob = crypto.encrypt_data(json.dumps(remote_session).encode("utf-8"), encryption_key)
-    (sessions_dir / "sess-remote_session.enc").write_text(session_blob, encoding="utf-8")
+    def build_remote(db):
+        db.insert_session(dict(_sample_session("sess-remote"), status="processed"))
+        db.store_summary("sess-remote", SAMPLE_SUMMARY)
 
-    remote_summary = dict(SAMPLE_SUMMARY, created_at="2026-07-31T16:00:00+00:00")
-    summary_blob = crypto.encrypt_data(json.dumps(remote_summary).encode("utf-8"), encryption_key)
-    (summaries_dir / "sess-remote_summary.enc").write_text(summary_blob, encoding="utf-8")
+    _write_remote_changeset(repo_path, encryption_key, "remote-device", build_remote)
 
     reindex_calls = []
     monkeypatch.setattr("src.embedder.reindex_all", lambda **kw: reindex_calls.append(kw) or 1)

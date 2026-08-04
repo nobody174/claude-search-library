@@ -19,7 +19,7 @@
 
 | Issue | Impact | Status | Solution |
 |-------|--------|--------|----------|
-| cr-sqlite Python bindings | Database sync | TBD | Use official package when available |
+| ~~cr-sqlite Python bindings~~ | Database sync | **RESOLVED 2026-08-05** | Real Windows binary vendored (`vendor/cr-sqlite/crsqlite.dll`), `sessions`/`summaries` are genuine CRR tables, sync.py exchanges real per-column changesets. See the 2026-08-05 session log below. |
 | GitHub API rate limits | Sync frequency | Low | 5-min interval ≈ 288 calls/day (well under limit) |
 | Mobile TOTP sync | iPhone setup | TBD | Consider alternative (SMS code?) if TOTP distribution complex |
 | ChromaDB persistence | Search rebuilding | Low | Handled by PersistentClient |
@@ -629,6 +629,98 @@ confirmed was gone.
   zero console errors). Left unresolved/unexplained rather than
   fabricating a fix for a bug that couldn't be found - round 4 of the
   same audit confirmed it did not reproduce on their end either.
+
+---
+
+## Session log (2026-08-05 — real cr-sqlite CRDT integration)
+
+**Trigger: the user is about to genuinely run two devices concurrently
+(desktop + a laptop, both real machines, both in active use) for the
+first time.** Until now cr-sqlite had never been installed on any
+device - `sessions.py`'s conflict resolution was entirely the
+hand-written whole-row Last-Write-Wins fallback described in `sync.py`'s
+docstrings. That's adequate for "one device at a time," but with two
+devices genuinely concurrent, a real conflict (both devices editing the
+same session between syncs) would silently discard one device's entire
+edit, even a change to a completely unrelated column. Decided, with the
+user, that this was worth fixing properly rather than documenting
+around, given real usage was about to start.
+
+- **Windows load error was a real, already-fixed upstream bug** (GitHub
+  issue vlcn-io/cr-sqlite#286, "Belirtilen modül bulunamadı" / "The
+  specified module could not be found") - confirmed via the issue
+  thread that a Windows-specific rebuild fixed it; the current release
+  (v0.16.3) works. Vendored `crsqlite-win-x86_64.zip`'s `crsqlite.dll`
+  into `vendor/cr-sqlite/` (loaded by explicit path, not by bare name -
+  see `storage._CR_SQLITE_EXTENSION_PATH`, since bare-name loading
+  depends on cwd/shared-library search path, unreliable across how this
+  app gets launched).
+- **Proved the actual point works before investing in the full
+  integration**: an isolated two-database test where "device A" and
+  "device B" each edit a *different column* of the *same row* without
+  syncing in between, then exchange changesets - both edits survived and
+  both devices converged. This is exactly the scenario the old
+  whole-row LWW fallback would have silently lost data on.
+- **Real schema constraints found and fixed** (cr-sqlite's own
+  `crsql_as_crr()` validation, not guessed): CRR tables need an explicit
+  `NOT NULL` on primary keys (bare `TEXT PRIMARY KEY` isn't enough in
+  SQLite); disallow *checked* foreign keys (replicated changesets can
+  legitimately arrive out of order - dropped `summaries.session_id`'s
+  FK to `sessions.id`, integrity now enforced at the application layer,
+  same as callers already did); disallow any unique index besides the
+  primary key (dropped `content_hash TEXT UNIQUE` - duplicate detection
+  was already done in application code before every insert, so this
+  was pure defense-in-depth, not load-bearing); every `NOT NULL` column
+  needs a `DEFAULT` (schema forwards/backwards compatibility across
+  devices on different app versions).
+- **`sync.py`'s push/pull rewritten**: `sessions`/`summaries` now
+  exchange real `crsql_changes` changesets (one encrypted file per push,
+  per device, named by the `db_version` it covers) instead of one
+  whole-row file per session - real per-column CRDT merge on pull
+  (`INSERT INTO crsql_changes`) replaces the hand-written LWW
+  comparison entirely. Raw chat files stay on the old per-session file
+  transport (unrelated to the SQL schema). One non-obvious real bug hit
+  and fixed while wiring this up: cr-sqlite's `site_id` column is never
+  `NULL` for local writes (always populated with the local site's own
+  ID) - the initial filter (`WHERE site_id IS NULL`) to mean "changes I
+  originated" was simply wrong and silently produced empty changesets;
+  the correct predicate is `site_id = crsql_site_id()`.
+- **Found and fixed a second, unrelated real bug via genuine two-device
+  E2E testing** (a real git remote, two real separate databases, no
+  mocking): `_update_device_metadata()` writes `sync_metadata.json`
+  straight to the working tree without committing it. Harmless if a
+  push follows immediately (push's own commit picks it up), but calling
+  `pull_from_github()` twice in a row with no intervening push - a
+  completely normal thing to do - left a real uncommitted change that
+  made the second `git pull` fail outright ("local changes would be
+  overwritten by merge"). Fixed by discarding that one bookkeeping
+  file's working-tree changes immediately before every pull (safe: it's
+  pure local metadata about to be rewritten by that same pull's own
+  `_update_device_metadata()` call anyway).
+- **Full test suite updated to match**, not left broken: rewrote every
+  affected `tests/test_sync.py` test around the new changeset shape
+  (real changesets generated via a genuine second `Storage` instance
+  standing in for "the other device," not hand-crafted - `pk` is an
+  internally-encoded binary blob, not safe to fabricate by hand), added
+  a dedicated concurrent-different-column-edit regression test, and
+  fixed one incidental test breakage in `tests/test_cli.py` from
+  earlier the same week's JSONL-auto-export change. 315/316 tests pass;
+  the one remaining failure is a pre-existing, unrelated test-isolation
+  bug (`verify_archive()`'s JSONL check hardcodes the real
+  `~/.claude-search-library/...` path instead of respecting the test's
+  isolated DB) - flagged, not fixed, out of scope for this session.
+- **Verified end-to-end for real**, not just unit-level: two genuinely
+  separate local databases, a real bare git repo standing in for
+  GitHub, real `crypto.encrypt_data`/`decrypt_data`, real cr-sqlite -
+  "desktop" pushed a session, "laptop" cloned fresh and pulled it
+  correctly, then both devices independently edited different fields of
+  the same session without syncing, and after syncing both edits
+  survived and both devices converged to an identical final state.
+- **Real data has not been migrated yet** as of this log entry - this
+  session shipped the code only. Migration plan (backup, convert
+  locally, verify, first real push, verify on GitHub) agreed with the
+  user; pilot planned on the laptop first (lower-stakes, easily
+  re-collectible data) before repeating on desktop.
 
 ---
 

@@ -32,6 +32,7 @@ You use Claude across multiple machines (home desktop, laptop at cabin, phone, t
 - GitHub account (private repo for your own data)
 - Google Authenticator (phone)
 - LastPass or similar (for master passphrase backup)
+- `vendor/cr-sqlite/crsqlite.dll` (Windows x86_64, already committed in this repo) — real CRDT multi-device merge. Missing/wrong-platform binary degrades gracefully to a plain-SQLite Last-Write-Wins fallback (see CLAUDE.md's Known Blockers); get other-platform builds from [cr-sqlite's releases](https://github.com/vlcn-io/cr-sqlite/releases).
 
 ### Installation (Desktop)
 
