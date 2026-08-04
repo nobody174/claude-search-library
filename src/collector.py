@@ -155,22 +155,129 @@ def collect_from_vscode(extensions_path: Optional[str] = None) -> list[dict]:
     return sessions
 
 
-def collect_from_cowork(cowork_path: Optional[str] = None) -> list[dict]:
-    """Collect sessions from a local Cowork cache folder.
+def _default_claude_desktop_root() -> Optional[Path]:
+    """Locate the Claude desktop app's (MSIX-packaged) Electron userData
+    root. Shared by collect_from_claude_desktop() and collect_from_cowork()
+    - see collect_from_claude_desktop()'s docstring for why this path
+    (rather than the usual %APPDATA%\\Claude) is correct on this machine."""
+    if platform.system().lower() != "windows":
+        return None
+    local_appdata = Path.home() / "AppData" / "Local"
+    return (
+        local_appdata / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming" / "Claude"
+    )
 
-    Cowork has no public sync API at time of writing, so this reads from a
-    local cache directory matching the normalized schema (Option B in SPEC.md).
+
+def _winlongpath(path: Path) -> Path:
+    """Prefix an absolute Windows path with \\\\?\\ so pathlib/os calls bypass
+    the classic 260-character MAX_PATH limit.
+
+    Needed for Cowork session paths specifically: the real nested
+    directory structure (local-agent-mode-sessions/<account>/<org>/
+    local_<uuid>/.claude/projects/<sanitized-full-path-as-dirname>/) has
+    been observed exceeding 440 characters, well past MAX_PATH. Without
+    this prefix, iterdir()/glob() on such a path fail with a silent
+    FileNotFoundError (not an obviously-relevant error - it looks like
+    "the directory doesn't exist" even though it does) rather than any
+    error naming the real cause. No-op on non-Windows or already-prefixed
+    paths.
+    """
+    if platform.system().lower() != "windows":
+        return path
+    resolved = str(path.resolve())
+    if resolved.startswith("\\\\?\\"):
+        return path
+    return Path("\\\\?\\" + resolved)
+
+
+def collect_from_cowork(cowork_path: Optional[str] = None) -> list[dict]:
+    """Collect Cowork (autonomous agent-mode) session transcripts from the
+    Claude desktop app's local session store.
+
+    Discovered 2026-08-04: each Cowork session runs a full local Claude
+    Code instance in its own sandbox, which writes the exact same JSONL
+    transcript format regular Claude Code uses
+    (~/.claude/projects/<project>/<session>.jsonl) - just nested under the
+    desktop app's own
+    local-agent-mode-sessions/<account-id>/<org-id>/local_<session-uuid>/
+    .claude/projects/ tree instead of the user's home directory. Reuses
+    _convert_claude_code_transcript() unchanged for the actual parsing -
+    no new wire format to reverse-engineer here, unlike
+    collect_from_claude_desktop()'s IndexedDB/Snappy/V8 problem.
+
+    Each local_<uuid> session directory has a sibling local_<uuid>.json
+    metadata file one level up carrying the session's real title and
+    createdAt (Unix ms) exactly as shown in the Cowork UI - preferred here
+    over the transcript's own embedded ai-title line/timestamps, since
+    it's the authoritative user-facing value.
+
+    Real, confirmed limitation (not a bug): Cowork sessions are entirely
+    absent from claude.ai's standard Settings -> Export Data feature - a
+    real Cowork session (dated 2026-07-26, confirmed against this exact
+    metadata file) was completely missing from a full account export
+    covering that date range. This local session store is therefore not
+    just an incremental supplement the way collect_from_claude_desktop()
+    is - for Cowork specifically, it is currently the *only* way to
+    recover this history at all.
     """
     if cowork_path is None:
-        cowork_path = str(Path.home() / ".claude-search-library" / "cache" / "cowork")
+        desktop_root = _default_claude_desktop_root()
+        if desktop_root is None:
+            return []
+        root = desktop_root / "local-agent-mode-sessions"
+    else:
+        root = Path(cowork_path)
 
-    folder = Path(cowork_path)
-    sessions = []
-    for data, raw_path in _load_json_files(folder):
+    sessions: list[dict] = []
+    if not root.exists():
+        return sessions
+
+    export_dir = Path.home() / ".claude-search-library" / "data" / "raw_exports" / "cowork"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    for meta_path in root.glob("**/local_*.json"):
+        session_dir = _winlongpath(meta_path.parent / meta_path.stem)
+        if not session_dir.is_dir():
+            continue
+
         try:
-            sessions.append(normalize_session(data, "cowork", detect_device(), raw_path))
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to read Cowork session metadata %s: %s", meta_path, e)
+            continue
+
+        jsonl_paths = list(session_dir.glob(".claude/projects/*/*.jsonl"))
+        if not jsonl_paths:
+            continue
+
+        try:
+            raw = _convert_claude_code_transcript(jsonl_paths[0])
+        except OSError as e:
+            logger.warning("Failed to read Cowork transcript %s: %s", jsonl_paths[0], e)
+            continue
+        if raw is None:
+            continue
+
+        if meta.get("title"):
+            raw["title"] = meta["title"]
+        created_at_ms = meta.get("createdAt")
+        if created_at_ms:
+            raw["created_at"] = datetime.fromtimestamp(created_at_ms / 1000, tz=timezone.utc).isoformat()
+
+        out_path = export_dir / f"{raw['id']}.json"
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(raw, f)
+        except OSError as e:
+            logger.warning("Failed to write converted Cowork transcript %s: %s", out_path, e)
+            continue
+
+        try:
+            sessions.append(normalize_session(raw, "cowork", detect_device(), str(out_path)))
         except Exception as e:
-            logger.warning("Failed to normalize %s: %s", raw_path, e)
+            logger.warning("Failed to normalize Cowork session %s: %s", meta_path, e)
+
     return sessions
 
 
@@ -396,18 +503,10 @@ def _convert_claude_desktop_tree(tree: dict) -> Optional[dict]:
 
 
 def _default_claude_desktop_indexeddb_root() -> Optional[Path]:
-    """Locate the Claude desktop app's (MSIX-packaged) Electron IndexedDB
-    directory. Windows-only today - the app is only installed as a
-    Microsoft Store package on this machine, virtualizing its userData dir
-    to %LOCALAPPDATA%\\Packages\\Claude_pzs8sxrjxfjjc\\...\\ rather than the
-    usual %APPDATA%\\Claude."""
-    if platform.system().lower() != "windows":
-        return None
-    local_appdata = Path.home() / "AppData" / "Local"
-    return (
-        local_appdata / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache"
-        / "Roaming" / "Claude" / "IndexedDB"
-    )
+    """Locate the Claude desktop app's IndexedDB directory (see
+    _default_claude_desktop_root() for the shared userData root logic)."""
+    root = _default_claude_desktop_root()
+    return None if root is None else root / "IndexedDB"
 
 
 def collect_from_claude_desktop(indexeddb_root: Optional[str] = None) -> list[dict]:
