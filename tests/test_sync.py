@@ -110,20 +110,36 @@ def test_check_for_changes_no_prior_sync_counts_all(repo_path, mock_repo, tmp_pa
     assert worker.check_for_changes() == 1
 
 
-def test_check_for_changes_respects_last_sync(repo_path, mock_repo, tmp_path, encryption_key):
+def test_check_for_changes_respects_per_session_synced_at(repo_path, mock_repo, tmp_path, encryption_key):
     db_path = str(tmp_path / "test.db")
     with Storage(db_path) as db:
         db.insert_session(_sample_session(updated_at="2026-07-30T00:00:00+00:00"))
-
-    metadata = {
-        "devices": {
-            "test-device": {"last_push_at": "2026-07-31T00:00:00+00:00", "pending_changes": 0}
-        }
-    }
-    (repo_path / sync.SYNC_METADATA_FILENAME).write_text(json.dumps(metadata), encoding="utf-8")
+        db.update_session("sess-1", {"synced_at": "2026-07-31T00:00:00+00:00"})
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     assert worker.check_for_changes() == 0
+
+
+def test_check_for_changes_counts_old_content_never_synced(repo_path, mock_repo, tmp_path, encryption_key):
+    """Regression test for a real bug (2026-08-04): a session whose
+    *content* predates this device's sync history (e.g. a bulk historical
+    import - a real conversation from months ago, imported today) must
+    still count as needing a push. The old implementation compared each
+    session's content timestamp against a single device-level "last
+    push" wall-clock checkpoint, so any newly-imported old content was
+    silently treated as already-synced forever, even though it had never
+    actually been pushed. Reproduces the exact scenario: a device that
+    has pushed before (so it has *some* synced sessions) imports a
+    conversation dated long before that prior push."""
+    db_path = str(tmp_path / "test.db")
+    with Storage(db_path) as db:
+        db.insert_session(_sample_session(session_id="already-synced", updated_at="2026-08-01T00:00:00+00:00"))
+        db.update_session("already-synced", {"synced_at": "2026-08-02T00:00:00+00:00"})
+        # Imported today, but its content is from months ago - never synced.
+        db.insert_session(_sample_session(session_id="old-import", updated_at="2026-03-01T00:00:00+00:00"))
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    assert worker.check_for_changes() == 1
 
 
 def test_push_to_github_encrypts_and_commits(repo_path, mock_repo, tmp_path, encryption_key):
@@ -163,18 +179,38 @@ def test_push_to_github_skips_already_synced_sessions(repo_path, mock_repo, tmp_
     db_path = str(tmp_path / "test.db")
     with Storage(db_path) as db:
         db.insert_session(_sample_session(updated_at="2026-07-30T00:00:00+00:00"))
+        db.update_session("sess-1", {"synced_at": "2026-07-31T00:00:00+00:00"})
         db.store_summary("sess-1", SAMPLE_SUMMARY)
-
-    metadata = {
-        "devices": {"test-device": {"last_push_at": "2026-07-31T00:00:00+00:00", "pending_changes": 0}}
-    }
-    (repo_path / sync.SYNC_METADATA_FILENAME).write_text(json.dumps(metadata), encoding="utf-8")
 
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
     result = worker.push_to_github()
 
     assert result["files_changed"] == 0
     mock_repo.remote.return_value.push.assert_not_called()
+
+
+def test_push_to_github_pushes_old_content_never_synced(repo_path, mock_repo, tmp_path, encryption_key):
+    """Regression test for the real 2026-08-04 bug (see
+    test_check_for_changes_counts_old_content_never_synced): a device
+    that has already pushed before must still push a newly-imported
+    session whose content predates that prior push."""
+    db_path = str(tmp_path / "test.db")
+    with Storage(db_path) as db:
+        db.insert_session(_sample_session(session_id="already-synced", updated_at="2026-08-01T00:00:00+00:00"))
+        db.update_session("already-synced", {"synced_at": "2026-08-02T00:00:00+00:00"})
+        db.insert_session(_sample_session(session_id="old-import", updated_at="2026-03-01T00:00:00+00:00"))
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    result = worker.push_to_github()
+
+    assert result["files_changed"] == 1  # only old-import's session metadata (no summary set)
+    assert (repo_path / sync.ENCRYPTED_SESSIONS_DIR / "old-import_session.enc").exists()
+    assert not (repo_path / sync.ENCRYPTED_SESSIONS_DIR / "already-synced_session.enc").exists()
+
+    with Storage(db_path) as db:
+        pushed = db.get_session("old-import")
+        assert pushed["synced_at"] is not None
+        assert pushed["sync_version"] == 2  # bumped from the default 1
 
 
 def test_pull_does_not_suppress_a_later_push(repo_path, mock_repo, tmp_path, encryption_key):

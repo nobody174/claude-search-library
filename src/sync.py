@@ -161,38 +161,46 @@ class SyncWorker:
         self.chroma_path = chroma_path
 
     def check_for_changes(self) -> int:
-        """Count sessions modified since this device's last push.
+        """Count sessions whose content has changed since *that session*
+        was last pushed - i.e. never pushed (synced_at is null) or edited
+        since its last push (content timestamp newer than its own
+        synced_at). Quick local SQLite check only — no network access.
 
-        Quick local SQLite check only — no network access.
+        Deliberately per-session (sessions.synced_at), not a single
+        device-level "last push" wall-clock checkpoint compared against
+        each session's own content timestamp. That comparison is wrong
+        for any newly-collected/imported session whose *content* predates
+        this device's checkpoint - which is the common case for a bulk
+        historical import (e.g. an official claude.ai export, or a
+        newly-cached Cowork/desktop-app session for an old conversation):
+        a session dated months ago looks "older than the last push" and
+        gets silently skipped forever, even though it has genuinely never
+        been pushed. Found via a real, reproducible case: importing a
+        real 2026-07-26 Cowork conversation on 2026-08-04 was silently
+        dropped from every subsequent push because 07-26 < 08-04.
         """
-        metadata = _read_sync_metadata(self.repo_path)
-        device_id = _device_id()
-        last_push_at = metadata.get("devices", {}).get(device_id, {}).get("last_push_at")
-
         with Storage(self.db_path) as db:
             sessions = db.get_all_sessions()
 
-        if not last_push_at:
-            return len(sessions)
-
         changed = [
             s for s in sessions
-            if (s.get("updated_at") or s.get("created_at") or "") > last_push_at
+            if not s.get("synced_at")
+            or (s.get("updated_at") or s.get("created_at") or "") > s["synced_at"]
         ]
         return len(changed)
 
     def push_to_github(self) -> dict:
-        """Encrypt and push changed sessions/summaries to the GitHub repo."""
+        """Encrypt and push changed sessions/summaries to the GitHub repo.
+
+        Selection is per-session (sessions.synced_at), not a device-level
+        "last push" checkpoint compared against each session's own content
+        timestamp - see check_for_changes()'s docstring for why that's
+        wrong (it silently drops any newly-imported session whose content
+        predates this device's checkpoint, e.g. bulk historical imports).
+        """
         _setup_file_logging()
         repo = _open_repo(self.repo_path)
-
-        metadata = _read_sync_metadata(self.repo_path)
         device_id = _device_id()
-        # last_push_at, not last_sync_at: a pull must never advance this
-        # checkpoint, or a pull-then-push (the normal daily flow) would
-        # see every real session as "already synced" and push nothing —
-        # see _update_device_metadata's docstring for the full story.
-        last_push_at = metadata.get("devices", {}).get(device_id, {}).get("last_push_at")
 
         sessions_dir = self.repo_path / ENCRYPTED_SESSIONS_DIR
         summaries_dir = self.repo_path / ENCRYPTED_SUMMARIES_DIR
@@ -202,11 +210,13 @@ class SyncWorker:
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         files_changed = []
+        now = datetime.now(timezone.utc).isoformat()
         with Storage(self.db_path) as db:
             sessions = db.get_all_sessions()
             for session in sessions:
+                synced_at = session.get("synced_at")
                 updated = session.get("updated_at") or session.get("created_at") or ""
-                if last_push_at and updated <= last_push_at:
+                if synced_at and updated <= synced_at:
                     continue
 
                 # Session metadata must be pushed too, not just the summary:
@@ -237,6 +247,11 @@ class SyncWorker:
                     raw_out_path = raw_dir / f"{session['id']}_raw.enc"
                     raw_out_path.write_text(blob, encoding="utf-8")
                     files_changed.append(str(raw_out_path.relative_to(self.repo_path)))
+
+                db.update_session(session["id"], {
+                    "synced_at": now,
+                    "sync_version": (session.get("sync_version") or 1) + 1,
+                })
 
         _update_device_metadata(self.repo_path, pending_changes=0, bump_push_checkpoint=True)
 
