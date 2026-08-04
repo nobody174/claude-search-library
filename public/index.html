@@ -10,7 +10,15 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Pinned to major version 7, not "latest": @babel/standalone@8 (released
+       2026) changed how it auto-transforms <script type="text/babel"> tags -
+       the transformed output leaves a literal `import` statement in a plain
+       (non-module) script, which browsers reject with "Cannot use import
+       statement outside a module", silently blanking the whole page with no
+       useful error surfaced anywhere in the DOM. Confirmed by reproducing
+       against a trivial "hello world" page - not specific to this app's code
+       at all. Re-pin deliberately if ever upgrading past major version 7. -->
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     // Command-center theme: near-black bg, elevated dark-gray surfaces, a
