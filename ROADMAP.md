@@ -318,6 +318,47 @@ Features to implement after public launch:
     by an automated fixture (impractical to construct byte-exact
     Chromium LevelDB+Snappy+V8 wire data by hand); it was verified
     directly against the real local store instead (see above).
+  - **Scope clarification (2026-08-04, confirmed with real usage)**: the
+    collector only ever reads the **Windows desktop app's own local
+    Chromium profile** — it has no visibility into conversations opened
+    only via a browser tab at claude.ai, or via mobile. Those remain
+    fully dependent on the manual export (#4). Practical implication:
+    the manual export is not fully retired by #9 — it's now an
+    occasional safety-net/catch-up (for browser-only or mobile-only
+    chats, and for old conversations never reopened in the desktop app)
+    rather than something needed after every session, as long as the
+    user's day-to-day usage is mostly through the desktop app. A future
+    idea, not yet started: apply the same local-cache-reading technique
+    to a regular browser's own profile (Chrome/Edge's IndexedDB for
+    claude.ai) to close this gap too.
+  - **`cli.py sync` now collects from every local source first by
+    default** (2026-08-03, see the "Always collect from local sources
+    before syncing" commit) — `sync`, the web UI's sync buttons, and
+    `--watch` all grab fresh local data (including this collector's
+    output) automatically before pushing, so a user no longer needs to
+    remember a separate `collect` step before syncing from a device.
+  - **Known bug found during real usage (2026-08-04), not yet fixed**:
+    when the *same* conversation (same Anthropic-assigned UUID) is
+    collected by two different sources with different content - e.g.
+    the claude-desktop collector captures a partial/cached rendering
+    first, then a full-export re-import later brings in the complete
+    version - `store_session_with_hash()` only handles two cases
+    (identical content-hash → skip as duplicate; new id → insert). A
+    same-id-different-hash case hits a raw `sqlite3.IntegrityError:
+    UNIQUE constraint failed: sessions.id` instead of updating the
+    existing row, aborting the whole `collect` run under `--fail-fast`
+    (or silently erroring that one session under the default
+    log-and-continue mode). Worked around manually this session by hand-
+    updating the affected row's `raw_file_path`/`content_hash`/counts
+    directly via `Storage.update_session()`. **Proper fix needed**:
+    `store_session_with_hash()` (or its caller) should detect this case
+    and update the existing row in place - most likely preferring
+    whichever version has more messages/content, mirroring the
+    Last-Write-Wins-by-content-completeness logic already used
+    elsewhere (see `sync.py`'s pull-side LWW merge) - rather than
+    treating it as a hard insert failure. Affects any workflow that
+    mixes the claude-desktop collector with periodic full-export
+    re-imports, not just a one-off edge case.
 
 ## 6. Secure credential entry UI (HIGH)
 - Problem found during real end-to-end testing: `--setup`/`--join-device`/`sync`
