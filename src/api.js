@@ -98,7 +98,16 @@ async function approveReview(sessionId, approved, notes = "") {
 
 /** Fetch archive integrity status (healthy/unhealthy + stats). Check before syncing. */
 async function getHealth() {
-  return request("/health");
+  // /health intentionally returns HTTP 503 when unhealthy (so tools like
+  // curl/monitoring see failure at the transport level), but the JSON body
+  // - {healthy, errors, warnings, stats} - is the real payload callers want
+  // either way. request() throws on non-2xx and would otherwise discard it.
+  try {
+    return await request("/health");
+  } catch (err) {
+    if (err.body) return err.body;
+    throw err;
+  }
 }
 
 /**
@@ -168,11 +177,32 @@ async function getCosts(options = {}) {
   return request(`/costs${qs ? `?${qs}` : ""}`);
 }
 
+/** Fetch sessions currently stuck in needs_review. */
+async function getNeedsReview() {
+  const data = await request("/review");
+  return data.sessions || [];
+}
+
+/** Re-run summarization + indexing for failed sessions. Omit sessionIds to reprocess all needs_review sessions. */
+async function reprocessReview(sessionIds) {
+  return request("/review/reprocess", {
+    method: "POST",
+    body: JSON.stringify(sessionIds && sessionIds.length ? { session_ids: sessionIds } : {}),
+  });
+}
+
+/** Fetch other sessions sharing tags with the given session. */
+async function getRelated(sessionId) {
+  const data = await request(`/session/${encodeURIComponent(sessionId)}/related`);
+  return data.related || [];
+}
+
 // Exposed as a global for the CDN-based React app (public/index.html) and
 // as CommonJS exports for anything that runs under Node/Jest.
 const api = {
   setup, search, getSession, getStats, getDevices, approveReview,
   getHealth, sync, importSessions, importExport, getCosts,
+  getNeedsReview, reprocessReview, getRelated,
 };
 
 if (typeof window !== "undefined") {

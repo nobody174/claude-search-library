@@ -138,7 +138,11 @@ def process(batch_size: int, watch: bool) -> None:
     def _run_once() -> dict:
         with Storage() as db:
             pending = [s["id"] for s in db.get_all_sessions() if s.get("status") == "new"]
-        return process_batch(pending, api_key=api_key, batch_size=batch_size)
+        result = process_batch(pending, api_key=api_key, batch_size=batch_size)
+        if result.get("succeeded"):
+            with Storage() as db:
+                db.export_summaries_to_jsonl()
+        return result
 
     if watch:
         import time

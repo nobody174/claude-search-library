@@ -95,7 +95,18 @@
       return debounced;
     }
 
+    const LOCK_HINT_SEEN_KEY = "csl_lock_hint_seen";
+
     function Header({ view, onNavigate, onLock }) {
+      const [showLockHint, setShowLockHint] = useState(
+        () => !localStorage.getItem(LOCK_HINT_SEEN_KEY)
+      );
+
+      const dismissLockHint = () => {
+        localStorage.setItem(LOCK_HINT_SEEN_KEY, "1");
+        setShowLockHint(false);
+      };
+
       return (
         <header className="sticky top-0 z-10 bg-surface/95 backdrop-blur border-b border-hairline px-4 py-3 flex items-center justify-between">
           <h1 className="text-lg font-semibold tracking-tight">
@@ -114,9 +125,32 @@
             >
               Sync
             </button>
-            <button className="px-3 py-2 rounded text-sm bg-surface2 text-muted hover:text-primary transition-colors" onClick={onLock}>
-              Lock
-            </button>
+            <div className="relative">
+              <button
+                className="px-3 py-2 rounded text-sm bg-surface2 text-muted hover:text-primary transition-colors"
+                onClick={() => {
+                  dismissLockHint();
+                  onLock();
+                }}
+              >
+                Lock
+              </button>
+              {showLockHint && (
+                <div className="absolute right-0 mt-2 w-56 bg-surface border border-accent/40 rounded-lg shadow-lg p-3 z-40 text-xs text-muted">
+                  <p>
+                    This is a one-time encryption setup, not a session-lock
+                    toggle — clicking it takes you straight to the passphrase +
+                    2FA screen with no way back except unlocking.
+                  </p>
+                  <button
+                    className="mt-2 text-accent hover:underline"
+                    onClick={dismissLockHint}
+                  >
+                    Got it
+                  </button>
+                </div>
+              )}
+            </div>
           </nav>
         </header>
       );
@@ -393,11 +427,20 @@
       );
     }
 
+    // Marker left by processor.py when a session's raw content couldn't be
+    // meaningfully analyzed (e.g. unrenderable blocks) - the summary still
+    // gets indexed, but it's not a real match for anything.
+    const UNPARSEABLE_TLDR_MARKER = "Unable to analyze session";
+
     function ResultCard({ result, onViewDetails }) {
+      const isUnparsed = (result.tldr || "").includes(UNPARSEABLE_TLDR_MARKER);
       return (
-        <div className="result-card bg-surface rounded-lg border border-hairline p-4 hover:border-accent/40 transition-colors">
+        <div className={`result-card bg-surface rounded-lg border p-4 transition-colors ${isUnparsed ? "border-hairline opacity-60" : "border-hairline hover:border-accent/40"}`}>
           <div className="flex items-start justify-between gap-2">
-            <h3 className="font-semibold text-base">{result.title || "(untitled session)"}</h3>
+            <h3 className="font-semibold text-base">
+              {isUnparsed && <span className="text-danger mr-1" title="This session failed to process and is not a real content match">⚠</span>}
+              {result.title || "(untitled session)"}
+            </h3>
             <span className="text-xs shrink-0 bg-surface2 text-accent font-mono rounded px-2 py-1">
               {(result.relevance_score * 100).toFixed(0)}%
             </span>
@@ -421,9 +464,10 @@
       );
     }
 
-    function SessionDetailModal({ sessionId, onClose }) {
+    function SessionDetailModal({ sessionId, onClose, onSelectSession }) {
       const [detail, setDetail] = useState(null);
       const [error, setError] = useState(null);
+      const [related, setRelated] = useState([]);
 
       useEffect(() => {
         let cancelled = false;
@@ -431,13 +475,30 @@
           .getSession(sessionId)
           .then((data) => !cancelled && setDetail(data))
           .catch((err) => !cancelled && setError(err.message));
+        apiClient
+          .getRelated(sessionId)
+          .then((data) => !cancelled && setRelated(data))
+          .catch(() => !cancelled && setRelated([]));
         return () => {
           cancelled = true;
         };
       }, [sessionId]);
 
+      useEffect(() => {
+        const handleKeyDown = (e) => {
+          if (e.key === "Escape") onClose();
+        };
+        document.addEventListener("keydown", handleKeyDown);
+        return () => document.removeEventListener("keydown", handleKeyDown);
+      }, [onClose]);
+
       return (
-        <div className="modal-overlay fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4">
+        <div
+          className="modal-overlay fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-20 p-0 sm:p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+        >
           <div className="modal bg-surface border border-hairline rounded-t-lg sm:rounded-lg w-full sm:max-w-lg max-h-[85vh] overflow-y-auto p-5">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-semibold">{detail?.title || "Session"}</h2>
@@ -493,6 +554,24 @@
                   </div>
                 )}
 
+                {related.length > 0 && (
+                  <div>
+                    <h3 className="font-medium mb-1 text-muted">Related Sessions</h3>
+                    <div className="space-y-1">
+                      {related.map((r) => (
+                        <button
+                          key={r.session_id}
+                          className="w-full text-left bg-surface2 hover:bg-surface2/70 rounded px-2 py-1.5 transition-colors"
+                          onClick={() => onSelectSession(r.session_id)}
+                        >
+                          <p className="text-sm">{r.title || "(untitled session)"}</p>
+                          <p className="text-xs text-muted font-mono">via {r.shared_tags.join(", ")}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {detail.link_to_raw ? (
                   <a
                     href={detail.link_to_raw}
@@ -523,7 +602,7 @@
       return out;
     }
 
-    function SearchPage() {
+    function SearchPage({ onNavigate }) {
       const [query, setQuery] = useState("");
       const [mode, setMode] = useState("hybrid");
       const [filters, setFilters] = useState({});
@@ -531,7 +610,13 @@
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [selectedSessionId, setSelectedSessionId] = useState(null);
+      const [health, setHealth] = useState(null);
       const debouncedQuery = useDebouncedValue(query, 300);
+      const debouncedFilters = useDebouncedValue(filters, 300);
+
+      useEffect(() => {
+        apiClient.getHealth().then(setHealth).catch(() => setHealth(null));
+      }, []);
 
       useEffect(() => {
         if (!debouncedQuery.trim()) {
@@ -542,17 +627,33 @@
         setLoading(true);
         setError(null);
         apiClient
-          .search(debouncedQuery, { top_k: 20, mode, filters: buildApiFilters(filters) })
+          .search(debouncedQuery, { top_k: 20, mode, filters: buildApiFilters(debouncedFilters) })
           .then((data) => !cancelled && setResults(data))
           .catch((err) => !cancelled && setError(err.message))
           .finally(() => !cancelled && setLoading(false));
         return () => {
           cancelled = true;
         };
-      }, [debouncedQuery, mode, filters]);
+      }, [debouncedQuery, mode, debouncedFilters]);
 
       return (
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+          {health?.healthy === false && (
+            <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 flex items-center justify-between gap-3 text-sm">
+              <p className="text-danger">
+                {(health.warnings || []).some((w) => w.includes("sessions but")) ||
+                (health.errors || []).length > 0
+                  ? "Archive health check found issues — some sessions may need reprocessing."
+                  : "Archive health check failed."}
+              </p>
+              <button
+                className="shrink-0 bg-danger/20 text-danger hover:bg-danger/30 transition-colors rounded px-3 py-1.5 text-xs font-medium"
+                onClick={() => onNavigate("devices")}
+              >
+                View / Repair
+              </button>
+            </div>
+          )}
           <div className="search-container flex gap-2">
             <div className="relative flex-1">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-accent font-mono pointer-events-none">
@@ -597,7 +698,11 @@
           </div>
 
           {selectedSessionId && (
-            <SessionDetailModal sessionId={selectedSessionId} onClose={() => setSelectedSessionId(null)} />
+            <SessionDetailModal
+              sessionId={selectedSessionId}
+              onClose={() => setSelectedSessionId(null)}
+              onSelectSession={setSelectedSessionId}
+            />
           )}
         </div>
       );
@@ -608,9 +713,16 @@
         if (!query.trim()) return <p className="text-sm text-muted/70">Start typing to search.</p>;
         if (results.length === 0) return <p className="text-sm text-muted/70">No results found.</p>;
 
+        const MIN_RELEVANCE = 0.2;
+        const strongResults = results.filter((r) => r.relevance_score >= MIN_RELEVANCE);
+
+        if (strongResults.length === 0) {
+          return <p className="text-sm text-muted/70">No strong matches found — try a different query.</p>;
+        }
+
         return (
           <div className="space-y-3">
-            {results.map((r) => (
+            {strongResults.map((r) => (
               <ResultCard key={r.session_id} result={r} onViewDetails={setSelectedSessionId} />
             ))}
           </div>
@@ -731,10 +843,17 @@
       const [stats, setStats] = useState(null);
       const [health, setHealth] = useState(null);
       const [costs, setCosts] = useState(null);
+      const [costPeriod, setCostPeriod] = useState(""); // "" (all-time) | "YYYY-MM" | "YYYY-QN"
+      const [needsReview, setNeedsReview] = useState([]);
       const [error, setError] = useState(null);
       const [refreshing, setRefreshing] = useState(false);
       const [activeModal, setActiveModal] = useState(null); // "push" | "pull" | "bidirectional" | null
       const [syncMessage, setSyncMessage] = useState(null);
+
+      const costOptions = useCallback(() => {
+        const isQuarter = costPeriod.includes("Q");
+        return isQuarter ? { quarter: costPeriod } : costPeriod ? { month: costPeriod } : {};
+      }, [costPeriod]);
 
       const load = useCallback(() => {
         setError(null);
@@ -742,16 +861,18 @@
           apiClient.getDevices(),
           apiClient.getStats(),
           apiClient.getHealth().catch(() => null),
-          apiClient.getCosts().catch(() => null),
+          apiClient.getCosts(costOptions()).catch(() => null),
+          apiClient.getNeedsReview().catch(() => []),
         ])
-          .then(([d, s, h, c]) => {
+          .then(([d, s, h, c, r]) => {
             setDevices(d);
             setStats(s);
             setHealth(h);
             setCosts(c);
+            setNeedsReview(r);
           })
           .catch((err) => setError(err.message));
-      }, []);
+      }, [costOptions]);
 
       useEffect(() => {
         load();
@@ -775,6 +896,26 @@
         );
         setActiveModal(null);
         load();
+      };
+
+      const [reprocessing, setReprocessing] = useState(null); // session_id being reprocessed, "*" for all, or null
+      const [reprocessMessage, setReprocessMessage] = useState(null);
+
+      const handleReprocess = async (sessionIds) => {
+        setReprocessing(sessionIds ? sessionIds[0] : "*");
+        setReprocessMessage(null);
+        try {
+          const result = await apiClient.reprocessReview(sessionIds);
+          setReprocessMessage(
+            `${result.succeeded.length} succeeded, ${result.failed.length} failed, ` +
+              `${result.needs_review.length} still need review`
+          );
+          load();
+        } catch (err) {
+          setReprocessMessage(`Error: ${err.message}`);
+        } finally {
+          setReprocessing(null);
+        }
       };
 
       const syncButtons = [
@@ -837,9 +978,70 @@
             )}
           </div>
 
+          {needsReview.length > 0 && (
+            <div className="bg-surface rounded-lg border border-danger/30 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-danger">
+                  Pending processing ({needsReview.length})
+                </h3>
+                <button
+                  className="text-xs bg-danger/15 text-danger hover:bg-danger/25 transition-colors rounded px-2 py-1 disabled:opacity-50"
+                  onClick={() => handleReprocess(null)}
+                  disabled={reprocessing !== null}
+                >
+                  {reprocessing === "*" ? "Reprocessing…" : "Reprocess All"}
+                </button>
+              </div>
+              <div className="space-y-1">
+                {needsReview.map((s) => (
+                  <div key={s.session_id} className="flex items-center justify-between gap-2 bg-surface2 rounded px-2 py-1.5">
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">{s.title || "(untitled session)"}</p>
+                      <p className="text-xs text-muted font-mono truncate">{s.source} · {s.review_reason}</p>
+                    </div>
+                    <button
+                      className="shrink-0 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
+                      onClick={() => handleReprocess([s.session_id])}
+                      disabled={reprocessing !== null}
+                    >
+                      {reprocessing === s.session_id ? "…" : "Reprocess"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {reprocessMessage && <p className="text-xs text-muted mt-2">{reprocessMessage}</p>}
+            </div>
+          )}
+
           {costs && (
             <div className="bg-surface rounded-lg border border-hairline p-4">
-              <h3 className="text-sm font-medium text-muted mb-2">API spend</h3>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-muted">API spend</h3>
+                <select
+                  className="bg-surface2 border border-hairline2 rounded px-2 py-1 text-xs"
+                  value={costPeriod}
+                  onChange={(e) => setCostPeriod(e.target.value)}
+                >
+                  <option value="">All time</option>
+                  {(() => {
+                    const now = new Date();
+                    const opts = [];
+                    for (let i = 0; i < 6; i++) {
+                      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                      const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                      opts.push(<option key={val} value={val}>{val}</option>);
+                    }
+                    const q = Math.floor(now.getMonth() / 3) + 1;
+                    for (let i = 0; i < 4; i++) {
+                      let qq = q - i, yy = now.getFullYear();
+                      while (qq < 1) { qq += 4; yy -= 1; }
+                      const val = `${yy}-Q${qq}`;
+                      opts.push(<option key={val} value={val}>{val}</option>);
+                    }
+                    return opts;
+                  })()}
+                </select>
+              </div>
               <div className="flex items-baseline justify-between">
                 <span className="text-2xl font-mono text-accent">${costs.total_cost_usd.toFixed(4)}</span>
                 <span className="text-xs text-muted">{costs.calls} call{costs.calls === 1 ? "" : "s"} · {costs.period}</span>
@@ -889,7 +1091,10 @@
         <footer className="sticky bottom-0 bg-surface/95 backdrop-blur border-t border-hairline px-4 py-2 text-xs text-muted font-mono flex flex-wrap gap-x-4 gap-y-1 justify-center sm:justify-start">
           <span>{stats.total_sessions ?? 0} sessions indexed</span>
           <span>last sync: {stats.last_sync || "never"}</span>
-          <span className={health?.healthy === false ? "text-danger" : "text-success"}>
+          <span
+            className={health?.healthy === false ? "text-danger" : "text-success"}
+            title={health?.healthy === false ? (health.errors || []).concat(health.warnings || []).join("\n") : undefined}
+          >
             archive: {health?.healthy === false ? "unhealthy" : health ? "verified" : "…"}
           </span>
         </footer>
@@ -916,7 +1121,7 @@
         <div className="min-h-screen flex flex-col">
           <Header view={view} onNavigate={setView} onLock={handleLock} />
           <div className="flex-1">
-            {view === "search" ? <SearchPage /> : <DevicesPage />}
+            {view === "search" ? <SearchPage onNavigate={setView} /> : <DevicesPage />}
           </div>
           <StatusFooter />
         </div>

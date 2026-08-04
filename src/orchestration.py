@@ -111,6 +111,7 @@ def run_collection(
             deduped_sessions.append(s)
 
     new_count = 0
+    updated_count = 0
     with Storage(db_path) as db:
         for session in deduped_sessions:
             try:
@@ -120,6 +121,8 @@ def run_collection(
                 )
                 if result["status"] == "inserted":
                     new_count += 1
+                elif result["status"] == "updated":
+                    updated_count += 1
             except Exception as e:
                 logger.error("Failed to store session %s: %s", session.get("id"), e)
                 errors += 1
@@ -128,6 +131,7 @@ def run_collection(
 
     return {
         "new": new_count,
+        "updated": updated_count,
         "errors": errors,
         "total": len(all_sessions),
         "sources": per_source,

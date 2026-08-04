@@ -130,6 +130,44 @@ def session_endpoint(session_id: str):
     return jsonify(response)
 
 
+@app.route("/session/<session_id>/related", methods=["GET"])
+def related_sessions_endpoint(session_id: str):
+    """GET /session/<id>/related — other sessions sharing the most tags,
+    ranked by overlap count. Personal-library scale (dozens-hundreds of
+    sessions), so an in-Python pass over all summaries is fine; no need
+    for a real similarity index on top of the existing tag data."""
+    limit = min(int(request.args.get("limit", 5)), 20)
+
+    with Storage() as db:
+        summary = db.get_summary(session_id)
+        own_tags = set((summary or {}).get("tags") or [])
+        if not own_tags:
+            return jsonify({"related": []})
+
+        candidates = []
+        for s in db.get_all_sessions():
+            if s["id"] == session_id or s.get("status") != "processed":
+                continue
+            other_summary = db.get_summary(s["id"])
+            other_tags = set((other_summary or {}).get("tags") or [])
+            overlap = own_tags & other_tags
+            if overlap:
+                candidates.append((len(overlap), s, other_summary, sorted(overlap)))
+
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return jsonify({
+        "related": [
+            {
+                "session_id": s["id"],
+                "title": s.get("title"),
+                "tldr": (summ or {}).get("tldr"),
+                "shared_tags": tags,
+            }
+            for _, s, summ, tags in candidates[:limit]
+        ]
+    })
+
+
 @app.route("/stats", methods=["GET"])
 def stats_endpoint():
     with Storage() as db:
@@ -343,6 +381,70 @@ def approve_review_endpoint(session_id: str):
             db.update_session(session_id, updated_fields)
 
     return jsonify({"session_id": session_id, "approved": bool(approved), "notes": notes})
+
+
+PENDING_STATUSES = ("needs_review", "new")
+
+
+@app.route("/review", methods=["GET"])
+def list_needs_review_endpoint():
+    """GET /review — sessions awaiting (re)processing: failed ones
+    (needs_review) and never-yet-summarized ones (new, whether freshly
+    collected or reset by an in-place content update), for the UI's
+    repair panel. Both are the same underlying action (process_batch),
+    just different reasons a session ended up pending."""
+    with Storage() as db:
+        rows = [
+            s for s in db.get_all_sessions() if s.get("status") in PENDING_STATUSES
+        ]
+    return jsonify({
+        "sessions": [
+            {
+                "session_id": s["id"],
+                "title": s.get("title"),
+                "source": s.get("source"),
+                "review_reason": s.get("review_reason") or ("new session" if s.get("status") == "new" else None),
+            }
+            for s in rows
+        ]
+    })
+
+
+@app.route("/review/reprocess", methods=["POST"])
+def reprocess_review_endpoint():
+    """POST /review/reprocess {"session_ids": [...]} (omit/empty for "all
+    pending" - needs_review + new) — re-runs summarization + indexing,
+    same code path as `cli.py process`. Costs real API spend per session,
+    same as any other summarization."""
+    import os
+
+    from src.processor import process_batch
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY is not set on the server"}), 500
+
+    body = request.get_json(silent=True) or {}
+    session_ids = body.get("session_ids")
+
+    with Storage() as db:
+        if session_ids:
+            targets = session_ids
+        else:
+            targets = [
+                s["id"] for s in db.get_all_sessions() if s.get("status") in PENDING_STATUSES
+            ]
+
+    if not targets:
+        return jsonify({"succeeded": [], "failed": [], "needs_review": []})
+
+    result = process_batch(targets, api_key=api_key, batch_size=len(targets))
+
+    if result.get("succeeded"):
+        with Storage() as db:
+            db.export_summaries_to_jsonl()
+
+    return jsonify(result)
 
 
 def main() -> None:

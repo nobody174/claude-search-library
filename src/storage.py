@@ -462,8 +462,32 @@ class Storage:
         later re-read of the raw file on disk (see verify_archive()) will
         recompute. `session_dict`'s own `messages`/`title` are otherwise
         unused for hashing when `hash_source` is given.
+
+        If a session with this exact id already exists but its content
+        legitimately changed since it was first collected (a growing live
+        conversation, a re-export overwriting the raw file, etc.), this
+        updates the existing row in place - refreshing content_hash so
+        verify_archive() stops reporting a permanent mismatch, and
+        resetting status to "new" so it gets (re)summarized - rather than
+        attempting a second INSERT with the same id, which previously
+        failed outright with a raw sqlite3.IntegrityError and left the
+        stale hash in place forever (see ROADMAP.md #9).
         """
         content_hash = compute_session_hash(hash_source if hash_source is not None else session_dict)
+
+        existing = self.get_session(session_dict["id"])
+        if existing is not None:
+            if existing.get("content_hash") == content_hash:
+                return {"status": "skipped_duplicate", "hash": content_hash, "id": session_dict["id"]}
+            updated_fields = {
+                k: session_dict.get(k)
+                for k in ("title", "updated_at", "message_count", "user_message_count", "assistant_message_count", "raw_file_path")
+                if k in session_dict
+            }
+            updated_fields["content_hash"] = content_hash
+            updated_fields["status"] = "new"
+            self.update_session(session_dict["id"], updated_fields)
+            return {"status": "updated", "hash": content_hash, "id": session_dict["id"]}
 
         if self.check_duplicate(content_hash):
             return {"status": "skipped_duplicate", "hash": content_hash}

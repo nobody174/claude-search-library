@@ -592,7 +592,23 @@ def collect_from_claude_desktop(indexeddb_root: Optional[str] = None) -> list[di
                 blink_deserializer = idbmod.ccl_blink_value_deserializer.BlinkV8Deserializer()
                 prefix = raw_db.make_prefix(db_id, store_id, 1)
 
-                trees: dict[str, dict] = {}
+                # LevelDB is append-only: every overwrite of the
+                # "react-query-cache" key leaves the old physical record in
+                # place until compaction runs, so an uncompacted dump can
+                # hold thousands of superseded versions of the same logical
+                # key. We only want the current one - and decoding the
+                # stale ones isn't just wasted work, it's *pathologically
+                # slow* wasted work: superseded "kReplaceWithBlob" records
+                # point at blob files that later blob-GC has already
+                # deleted, and get_blob()'s FileNotFoundError path is slow
+                # enough (~0.6s observed) that a real profile with a few
+                # thousand stale records turns this into a de facto hang
+                # (30+ min) instead of the sub-second job it should be.
+                # record.seq is the LevelDB write sequence number, so
+                # picking the max-seq record per physical key before ever
+                # calling the decoder fixes both correctness (stale writes
+                # never should have been read as current) and performance.
+                latest_by_key: dict[bytes, object] = {}
                 for record in raw_db._fetched_records:
                     if not record.key.startswith(prefix):
                         continue
@@ -603,7 +619,13 @@ def collect_from_claude_desktop(indexeddb_root: Optional[str] = None) -> list[di
                     key = idbmod.IdbKey(record.key[len(prefix):])
                     if key.value != "react-query-cache":
                         continue
+                    existing = latest_by_key.get(record.key)
+                    if existing is None or record.seq > existing.seq:
+                        latest_by_key[record.key] = record
 
+                trees: dict[str, dict] = {}
+                for record in latest_by_key.values():
+                    key = idbmod.IdbKey(record.key[len(prefix):])
                     value_version, varint_raw = idbmod._le_varint_from_bytes(record.value)
                     buf = record.value[len(varint_raw):]
                     try:
