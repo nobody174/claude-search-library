@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".claude-search-library" / "data" / "claude_search.db"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -166,9 +166,86 @@ def _try_load_cr_sqlite(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone() is not None
+
+
+def _migrate_v1_to_v2_crdt_schema(conn: sqlite3.Connection) -> None:
+    """Rebuild sessions/summaries in place for a database created before
+    cr-sqlite integration (SCHEMA_VERSION 1) - `CREATE TABLE IF NOT EXISTS`
+    in _SCHEMA only affects brand-new databases, so an existing real
+    database still has the old `content_hash TEXT UNIQUE` index and the
+    old `summaries.session_id REFERENCES sessions(id)` FK, both of which
+    crsql_as_crr() rejects outright. SQLite can't ALTER a column's
+    NOT NULL/UNIQUE/FK constraints directly, so this uses the standard
+    SQLite migration pattern: build the new-shape tables under temporary
+    names, copy every row across, drop the old tables, rename. All
+    existing data (content, ids, timestamps) is preserved exactly -
+    only the constraint shape changes.
+
+    Caller (_run_schema_upgrades) must confirm `sessions` already existed
+    *before this init_db() call* before invoking this - this function
+    always runs unconditionally once called, and unconditionally
+    recreates sessions/summaries via _SCHEMA. Running it against a table
+    _SCHEMA's own top-level executescript() just freshly created (i.e. a
+    genuinely new database) would rename that brand-new empty table away
+    and recreate it, leaving any cr-sqlite triggers already attached to
+    the original table dangling - the real bug this ordering fixes.
+    """
+    logger.info("Migrating sessions/summaries to the cr-sqlite-compatible schema (one-time)")
+
+    conn.executescript("""
+        ALTER TABLE sessions RENAME TO sessions_v1_old;
+        ALTER TABLE summaries RENAME TO summaries_v1_old;
+    """)
+    conn.executescript(_SCHEMA)  # recreates sessions/summaries with the new constraint shape
+
+    conn.execute(f"""
+        INSERT INTO sessions ({', '.join(SESSION_COLUMNS)})
+        SELECT {', '.join(SESSION_COLUMNS)} FROM sessions_v1_old
+    """)
+    conn.execute("""
+        INSERT INTO summaries (
+            session_id, tldr, learnings, patterns, tags, mentioned_tools,
+            mentioned_languages, mentioned_frameworks, estimated_effort_minutes,
+            topic_categories, confidence_score, created_at
+        )
+        SELECT
+            session_id, tldr, learnings, patterns, tags, mentioned_tools,
+            mentioned_languages, mentioned_frameworks, estimated_effort_minutes,
+            topic_categories, confidence_score, created_at
+        FROM summaries_v1_old
+    """)
+    conn.executescript("""
+        DROP TABLE sessions_v1_old;
+        DROP TABLE summaries_v1_old;
+    """)
+    conn.commit()
+
+    migrated = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    logger.info("Schema migration complete: %d session(s) preserved", migrated)
+
+
 def _run_schema_upgrades(conn: sqlite3.Connection) -> None:
-    row = conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()
-    current_version = int(row[0]) if row else 0
+    """Create/upgrade the schema. Must run before crsql_as_crr() and before
+    any other caller touches sessions/summaries - see
+    _migrate_v1_to_v2_crdt_schema's docstring for why migration has to
+    happen before _SCHEMA's own executescript() gets a chance to
+    freshly create those two tables itself."""
+    sessions_existed_before = _table_exists(conn, "sessions")
+    current_version = 0
+    if _table_exists(conn, "schema_meta"):
+        row = conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()
+        current_version = int(row[0]) if row else 0
+
+    if sessions_existed_before and current_version < 2:
+        _migrate_v1_to_v2_crdt_schema(conn)
+
+    conn.executescript(_SCHEMA)  # no-op for anything migration already (re)created; creates the rest
+    conn.commit()
+
     if current_version < SCHEMA_VERSION:
         conn.execute(
             "INSERT INTO schema_meta (key, value) VALUES ('version', ?) "
@@ -211,14 +288,18 @@ def init_db(db_path: Optional[str] = None) -> sqlite3.Connection:
 
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
     cr_sqlite_loaded = _try_load_cr_sqlite(conn)
-    conn.executescript(_SCHEMA)
+    # foreign_keys is off for the schema/migration steps (SQLite's own
+    # documented recommendation for ALTER TABLE RENAME/DROP-based
+    # migrations - see _migrate_v1_to_v2_crdt_schema) and turned on
+    # afterward, once the schema is in its final shape.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    _run_schema_upgrades(conn)  # creates/migrates the schema - must run before crsql_as_crr()
     if cr_sqlite_loaded:
         for table in CR_SQLITE_CRR_TABLES:
             conn.execute(f"SELECT crsql_as_crr('{table}')")
-    conn.commit()
-    _run_schema_upgrades(conn)
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
