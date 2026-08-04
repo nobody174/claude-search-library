@@ -462,6 +462,82 @@ See `SPEC.md` → "Troubleshooting" for more issues.
   system-completeness order — UI/visual polish is explicitly deferred
   until the underlying system itself is fully working.
 
+## Session log (2026-08-03 to 2026-08-04)
+
+**All 5 original ROADMAP.md items shipped this stretch (#1-#5), plus #9
+(new, solved) and web UI polish. The system is now fully working
+end-to-end with real personal data, not just tests.**
+
+- **#1-#5 shipped**: PowerShell orchestration, cost reporting
+  (`cli.py costs`), Markdown export, Web Chat Import (rewritten - the
+  original plan was the same ToS-risky scraping approach #8 already
+  ruled out; built `src/claude_export_import.py` for the official
+  Settings → Export Data flow instead), retention/pruning
+  (`cli.py prune`).
+- **New collectors beyond the original roadmap, all built from real
+  local app data, never claude.ai's private API:**
+  - `collect_from_claude_code()` — Claude Code's own
+    `~/.claude/projects/*.jsonl` transcripts.
+  - `collect_from_claude_desktop()` — the desktop app's local IndexedDB
+    cache. Required real reverse-engineering (Chromium's Snappy
+    compression wasn't being decompressed before V8 deserialization -
+    see ROADMAP.md #9 for the full investigation). Only captures
+    conversations actually opened in the desktop app recently, not full
+    history.
+  - `collect_from_cowork()` — Cowork sessions, discovered by the user
+    noticing a different icon next to 3 conversations. Much simpler than
+    the desktop-app one (plain JSONL, same format as Claude Code) once
+    found, but confirmed Cowork sessions are **entirely absent** from
+    the official export - this collector is the *only* way to recover
+    them.
+  - Real bug fixed along the way: Cowork's nested folder paths exceed
+    Windows' 260-char MAX_PATH, silently breaking plain pathlib
+    glob/iterdir. Fixed with a `\\?\` long-path prefix helper.
+- **`cli.py sync` now auto-collects from every local source first** by
+  default (`--no-collect` to opt out) - closes the "forgot to collect
+  before syncing" gap, especially for the desktop-app/Cowork collectors
+  whose data only exists locally until pushed.
+- **Two serious, currently-active sync bugs found and fixed via real
+  usage, not unit tests:**
+  1. Pull was bumping the same device-level checkpoint push used to
+     decide what's new, so a pull-then-push (the normal flow) silently
+     pushed nothing.
+  2. Push compared each session's own *content* timestamp against that
+     device checkpoint, so any newly-imported historical session (an
+     old conversation imported today) looked "already synced" and was
+     silently dropped forever. This one was serious - it affected most
+     of a 41-conversation real historical import. Fixed by switching to
+     proper per-session `synced_at` tracking (the column already
+     existed in the schema, unused until now).
+- **Login friction fixed**: `join_device_existing_setup()` used to
+  re-derive the encryption key (full passphrase+TOTP popup) on every
+  single CLI call. Added a 30-minute local session cache
+  (`SESSION_CACHE_PATH`) - explicit personal-machine tradeoff, not a
+  general security default.
+- **Web UI polish**: full dark "command-center" reskin (near-black bg,
+  amber accent, JetBrains Mono for data) plus 4 real functional fixes
+  found by reading the code, not just cosmetics - search filters were
+  completely non-functional end-to-end (built but never wired through
+  api.js/server.py), the drag-and-drop importer bypassed the real export
+  converter entirely, health check errors were invisible, cost/pruning
+  had no UI surface. Also fixed a separate real bug: the page went
+  totally blank because `@babel/standalone`'s unpinned CDN URL silently
+  upgraded to an incompatible major version (8) - pinned to `@7`.
+- **Real data now in the library and fully synced**: 59 sessions across
+  claude-ai (45, from a real full account export), claude-code (11),
+  and cowork (3) - all pushed to `github.com/nobody174/claude-search-data`
+  and verified present there directly via `gh api`, not just trusted.
+- **Real, confirmed limitation worth remembering**: the automatic
+  collectors (claude-code, claude-desktop, cowork) only ever see this
+  machine's own local app data - never conversations from a browser tab
+  or mobile. The manual export (#4) is not fully retired, just
+  downgraded to an occasional safety-net for those.
+- **Not yet fixed** (documented in ROADMAP.md #9, real but lower
+  priority): when the same conversation UUID is collected by two
+  different sources with different content, `store_session_with_hash()`
+  crashes with a raw `sqlite3.IntegrityError` instead of updating in
+  place. Worked around by hand once; needs a proper fix.
+
 ---
 
 ## Contact & Support
@@ -472,6 +548,6 @@ See `SPEC.md` → "Troubleshooting" for more issues.
 
 ---
 
-**Last Updated**: August 2, 2026
+**Last Updated**: August 4, 2026
 **Author**: Vartdal (nobody174)
 **License**: MIT
