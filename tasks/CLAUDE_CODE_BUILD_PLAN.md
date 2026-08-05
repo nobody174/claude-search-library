@@ -36,7 +36,7 @@ code .
 
 For each task (1-10):
 
-1. **Open** `tasks/TASK_N_*.md` file
+1. **Open** the `TASK_N_*.md` file (in this same `tasks/` folder)
 2. **Copy the entire prompt** (everything inside the file)
 3. **Paste into Claude Code chat** (Claude extension panel in VS Code)
 4. **Wait for code generation**
