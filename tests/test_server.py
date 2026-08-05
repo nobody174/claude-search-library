@@ -97,6 +97,43 @@ def test_setup_success_issues_a_session_cookie(unauth_client, monkeypatch):
     assert unauth_client.get("/stats").status_code == 200
 
 
+def test_setup_locks_out_after_repeated_failures(unauth_client, monkeypatch):
+    """Regression test for a real Devil's Advocate finding: /setup had no
+    limit on how many passphrase+TOTP guesses could be thrown at it -
+    Argon2id makes each guess expensive, but that's not the same as a
+    bounded total attempt count."""
+    monkeypatch.setattr(server, "_setup_attempts", {})
+    monkeypatch.setattr(server.crypto, "_fetch_secrets_from_github", lambda: (_ for _ in ()).throw(Exception("nope")))
+
+    for _ in range(server.SETUP_MAX_ATTEMPTS):
+        resp = unauth_client.post("/setup", json={"passphrase": "wrong", "totp_code": "000000"})
+        assert resp.status_code == 401
+
+    resp = unauth_client.post("/setup", json={"passphrase": "wrong", "totp_code": "000000"})
+    assert resp.status_code == 429
+    assert "Too many failed attempts" in resp.get_json()["error"]
+
+
+def test_setup_success_clears_prior_failures(unauth_client, monkeypatch):
+    monkeypatch.setattr(server, "_setup_attempts", {})
+    monkeypatch.setattr(server.crypto, "_fetch_secrets_from_github", lambda: "encrypted-blob")
+    monkeypatch.setattr(server.crypto, "_derive_passphrase_only_key", lambda p: b"key")
+    monkeypatch.setattr(server.crypto, "decrypt_data", lambda blob, key: b"totp-secret")
+
+    monkeypatch.setattr(server.crypto, "verify_totp_code", lambda secret, code: False)
+    for _ in range(server.SETUP_MAX_ATTEMPTS - 1):
+        assert unauth_client.post("/setup", json={"passphrase": "x", "totp_code": "0"}).status_code == 401
+
+    monkeypatch.setattr(server.crypto, "verify_totp_code", lambda secret, code: True)
+    assert unauth_client.post("/setup", json={"passphrase": "x", "totp_code": "0"}).status_code == 200
+
+    # A successful login clears the failure count, so a fresh round of
+    # wrong attempts afterward isn't instantly locked out by leftover
+    # history from before the successful login.
+    monkeypatch.setattr(server.crypto, "verify_totp_code", lambda secret, code: False)
+    assert unauth_client.post("/setup", json={"passphrase": "x", "totp_code": "0"}).status_code == 401
+
+
 def test_logout_invalidates_the_session(client):
     assert client.get("/stats").status_code == 200
     resp = client.post("/logout")

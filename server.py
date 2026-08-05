@@ -79,6 +79,34 @@ def _invalidate_session(token: Optional[str]) -> None:
         _sessions.pop(token, None)
 
 
+# --- /setup brute-force protection --------------------------------------
+# The session gate above stops unauthenticated access, but /setup itself
+# had no limit on how many passphrase+TOTP guesses could be thrown at it -
+# Argon2id makes each guess expensive and TOTP narrows the window, but
+# "expensive per guess" isn't the same as "bounded total guesses". Found
+# via a Devil's Advocate pass on the session-gate fix itself. Per-source-IP
+# lockout, in-memory (resets on restart, same as sessions - acceptable for
+# a personal-machine security boundary).
+SETUP_MAX_ATTEMPTS = 5
+SETUP_LOCKOUT_SECONDS = 15 * 60
+_setup_attempts: dict[str, list] = {}  # ip -> [timestamp, ...] of recent failures
+
+
+def _setup_locked_out(ip: str) -> bool:
+    cutoff = time.time() - SETUP_LOCKOUT_SECONDS
+    attempts = [t for t in _setup_attempts.get(ip, []) if t > cutoff]
+    _setup_attempts[ip] = attempts
+    return len(attempts) >= SETUP_MAX_ATTEMPTS
+
+
+def _record_setup_failure(ip: str) -> None:
+    _setup_attempts.setdefault(ip, []).append(time.time())
+
+
+def _clear_setup_failures(ip: str) -> None:
+    _setup_attempts.pop(ip, None)
+
+
 @app.before_request
 def _require_session():
     if request.method == "OPTIONS":
@@ -125,6 +153,13 @@ def setup_endpoint():
     TOTP secret the device already has locally (see Task 6's two-factor
     key derivation). This endpoint is authentication, not key distribution.
     """
+    ip = request.remote_addr or "unknown"
+    if _setup_locked_out(ip):
+        return jsonify({
+            "success": False,
+            "error": f"Too many failed attempts. Try again in up to {SETUP_LOCKOUT_SECONDS // 60} minutes.",
+        }), 429
+
     body = request.get_json(silent=True) or {}
     passphrase = body.get("passphrase")
     totp_code = body.get("totp_code")
@@ -137,15 +172,29 @@ def setup_endpoint():
         passphrase_key = crypto._derive_passphrase_only_key(passphrase)
         totp_secret = crypto.decrypt_data(encrypted_totp, passphrase_key).decode("utf-8")
     except Exception:
+        _record_setup_failure(ip)
         return jsonify({"success": False, "error": "invalid passphrase"}), 401
 
     if not crypto.verify_totp_code(totp_secret, totp_code):
+        _record_setup_failure(ip)
         return jsonify({"success": False, "error": "invalid TOTP code"}), 401
 
+    _clear_setup_failures(ip)
     response = jsonify({"success": True})
     response.set_cookie(
         SESSION_COOKIE_NAME, _create_session(),
         max_age=SESSION_TTL_SECONDS, httponly=True, samesite="Strict",
+        # secure=True whenever the request actually arrived over HTTPS, so
+        # this automatically tightens if TLS is ever added, without
+        # forcing it now - this server currently runs over plain HTTP by
+        # design (LAN/phone access per CLAUDE.md), and browsers refuse to
+        # honor Secure cookies set over a non-HTTPS LAN origin at all, so
+        # hardcoding secure=True would just silently break login rather
+        # than protect anything. The residual risk this doesn't close -
+        # the session cookie still crosses the LAN in cleartext without
+        # TLS - needs a real HTTPS setup (cert management, phone trust
+        # prompts) to fix properly; flagged, not silently decided here.
+        secure=request.is_secure,
     )
     return response
 
