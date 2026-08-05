@@ -55,6 +55,10 @@ Rebuild ChromaDB
 Search locally (semantic + keyword)
 ```
 
+For the real step-by-step logic (actual function names, decision points,
+and error paths traced from source, not this simplified summary), see
+[docs/ARCHITECTURE_FLOW.md](docs/ARCHITECTURE_FLOW.md).
+
 ---
 
 ## Tech Stack
