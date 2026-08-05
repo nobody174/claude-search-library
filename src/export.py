@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Markdown export module for Claude Search Library.
 
 Renders a session (raw messages, when available on disk) plus its stored
@@ -102,3 +111,5 @@ def export_session(session_id: str, output_path: Optional[str] = None, db_path: 
         f.write(markdown)
 
     return output_path
+
+# Built with assistance from Claude Code by Anthropic.

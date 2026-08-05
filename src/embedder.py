@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Vector embeddings module for Claude Search Library.
 
 Wraps a local, persistent ChromaDB collection for semantic search over
@@ -197,3 +206,5 @@ def reindex_all(db_path: Optional[str] = None, chroma_path: Optional[str] = None
 
     logger.info("reindex_all complete: %d sessions re-embedded", count)
     return count
+
+# Built with assistance from Claude Code by Anthropic.

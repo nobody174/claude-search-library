@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Redaction & privacy module for Claude Search Library.
 
 Masks sensitive data (API keys, tokens, emails, IPs, etc.) in session
@@ -14,10 +23,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.storage import DEFAULT_DB_PATH as DB_PATH
+
 logger = logging.getLogger(__name__)
 
 LOG_PATH = Path.home() / ".claude-search-library" / "logs" / "redaction.log"
-DB_PATH = Path.home() / ".claude-search-library" / "data" / "claude_search.db"
 
 REVIEW_THRESHOLD = 3
 
@@ -168,3 +178,5 @@ def redact_summary(summary_dict: dict, session_id: str, db_path: Optional[str] =
     _write_redaction_log(events, db_path=db_path)
 
     return redacted_summary, events
+
+# Built with assistance from Claude Code by Anthropic.

@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Search interface module for Claude Search Library.
 
 Provides semantic search (ChromaDB), keyword search (FTS5 with a LIKE
@@ -314,3 +323,5 @@ class HybridSearch:
             return self.hybrid_search(query, top_k=top_k, filters=filters or None)
         else:
             raise ValueError(f"Unknown search mode: {mode}")
+
+# Built with assistance from Claude Code by Anthropic.

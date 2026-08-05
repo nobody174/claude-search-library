@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Distributed sync module for Claude Search Library.
 
 Syncs encrypted session data across devices via a GitHub repo acting as
@@ -592,3 +601,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Built with assistance from Claude Code by Anthropic.

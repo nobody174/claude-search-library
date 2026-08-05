@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Local GUI credential prompt for Claude Search Library.
 
 Replaces getpass.getpass()/input() for passphrase + TOTP entry with a
@@ -352,3 +361,5 @@ def prompt_totp_only(title: str = "Confirm sync") -> str:
 
     result = _run_popup(build)
     return result["totp_code"]
+
+# Built with assistance from Claude Code by Anthropic.

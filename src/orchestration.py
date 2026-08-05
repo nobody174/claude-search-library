@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Collection orchestration for Claude Search Library.
 
 Adds source selection and two failure-handling modes on top of the
@@ -136,3 +145,5 @@ def run_collection(
         "total": len(all_sessions),
         "sources": per_source,
     }
+
+# Built with assistance from Claude Code by Anthropic.

@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Official claude.ai Data Export import (Web Chat Import, see CHANGELOG.md).
 
 Converts the ZIP/JSON a user downloads from claude.ai's own
@@ -119,3 +128,5 @@ def import_official_export(export_path: str, output_dir: Optional[str] = None) -
         files.append(str(out_path))
 
     return {"converted": len(files), "skipped": skipped, "files": files}
+
+# Built with assistance from Claude Code by Anthropic.

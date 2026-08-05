@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Processing & summarization module for Claude Search Library.
 
 Summarizes chat sessions using the Claude API, batching requests to respect
@@ -453,3 +462,5 @@ def _summarize_with_backoff(chat_dict: dict, api_key: str, results: dict, db) ->
             time.sleep(delay)
             delay *= 2
     return False
+
+# Built with assistance from Claude Code by Anthropic.

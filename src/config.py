@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Configuration management for Claude Search Library.
 
 Loads config.yaml (with ${VAR_NAME} environment variable substitution),
@@ -183,3 +192,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Built with assistance from Claude Code by Anthropic.

@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Cost reporting module for Claude Search Library.
 
 Tracks API spend per session and produces monthly/quarterly reports.
@@ -115,3 +124,5 @@ def get_report(db_path: Optional[str] = None, month: Optional[str] = None, quart
 
     report["period"] = month or quarter or "all-time"
     return report
+
+# Built with assistance from Claude Code by Anthropic.

@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Encryption & 2FA module for Claude Search Library.
 
 Derives a Fernet encryption key from a master passphrase + TOTP secret
@@ -450,3 +459,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Built with assistance from Claude Code by Anthropic.

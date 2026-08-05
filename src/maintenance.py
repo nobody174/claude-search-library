@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Retention/pruning module for Claude Search Library.
 
 Prunes old raw chat content while keeping sessions searchable: the
@@ -85,3 +94,5 @@ def prune_sessions(older_than_days: int = 365, dry_run: bool = True, db_path: Op
             pruned += 1
 
     return {"candidates": len(candidates), "pruned": pruned, "freed_bytes": freed_bytes, "dry_run": False}
+
+# Built with assistance from Claude Code by Anthropic.
