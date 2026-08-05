@@ -21,19 +21,13 @@ what's shipped (see [CHANGELOG.md](CHANGELOG.md) for that).
   destructive (force-push, breaks any existing clones) so treat as a real
   decision each time, not a default.
 
-- **`test-session-001` fixture row mixed into the real dataset.** A fake
-  "Debugging a Python async race condition" session (source `claude-ai`)
-  was found sitting alongside the real 61-session dataset. Flagged to the
-  user 2026-08-04, deliberately not deleted — whether to remove it is
-  the user's call.
-
 ## Known, low-severity, not currently worth fixing
 
-- **5 real sessions (+ the `test-session-001` fixture) have no readable
-  raw file**, so their pre-redaction-fix summaries can't be regenerated
-  through the reprocessing pipeline. Pre-existing, not new — `/health`
-  has flagged these as "no readable raw file" all along. Nothing to do
-  unless the original raw exports turn up somewhere.
+- **5 real sessions have no readable raw file**, so their pre-redaction-fix
+  summaries can't be regenerated through the reprocessing pipeline.
+  Pre-existing, not new — `/health` has flagged these as "no readable raw
+  file" all along. Nothing to do unless the original raw exports turn up
+  somewhere.
 
 - **Genuinely simultaneous (not just sequential) CRDT writes are proven
   safe** (deterministic convergence, no corruption) but only for one
@@ -56,9 +50,3 @@ what's shipped (see [CHANGELOG.md](CHANGELOG.md) for that).
   own profile (Chrome/Edge's IndexedDB for claude.ai) to close this gap
   too. Not scheduled — the manual export (Web Chat Import) already covers
   this as an occasional safety net.
-
-## Closed (kept briefly for continuity, remove once stale)
-
-- ~~`_sessions`/`_setup_attempts` in-memory maps in `server.py` only
-  pruned stale entries lazily~~ — **fixed 2026-08-05 (desktop)**: both
-  now get swept every 10 minutes on request. See CHANGELOG.md.

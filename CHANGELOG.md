@@ -843,4 +843,39 @@ personal data, not just tests.**
   is desktop/web only; unofficial claude.ai scrapers exist but violate
   Anthropic's ToS (real account-suspension risk, confirmed via dedicated
   research, not assumed); no iOS Share Sheet export hook exists either.
+
+---
+
+## 2026-08-01 — secure credential entry UI (GUI popup for passphrase + TOTP)
+
+**Trigger: a real UX/automation gap hit while testing sync** —
+`getpass.getpass()`/`input()` only work in a genuine interactive
+terminal, so any automated caller (an agent driving the CLI, a
+scheduled task, a non-interactive shell) had no way to supply a
+passphrase or live TOTP code short of a plaintext `.env` workaround.
+
+- **Shipped `src/auth_ui.py`**: a small, dark-themed Tkinter popup,
+  GUI-first with a silent terminal fallback
+  (`CLAUDE_SEARCH_NO_GUI_AUTH=1` forces terminal prompts instead, e.g.
+  over SSH/headless). Runs entirely on the calling/main thread - an
+  earlier background-thread version hit real, reproducible Tcl crashes
+  (`Tcl_AsyncDelete: async handler deleted by the wrong thread`) on
+  submit, confirmed via live testing. Has a hard timeout
+  (`AUTH_UI_TIMEOUT_SECONDS`) so a stray invocation in an unattended
+  context fails loudly instead of hanging forever - also confirmed via
+  live testing, after an early version briefly hung during a pytest
+  run before tests forced GUI auth off.
+- **`src/crypto.py`'s `setup_device_first_time()`/
+  `join_device_existing_setup()` now use the GUI-aware prompts.** QR
+  codes stay as terminal ASCII art (no new Pillow dependency needed
+  for that). Nothing entered in the popup is ever written to disk -
+  values return to the caller in memory only, same as the terminal
+  prompts they replace.
+- **Tests never allow a real popup**: `test_crypto.py`'s autouse
+  fixture forces GUI auth off; `test_auth_ui.py` exercises the real Tk
+  submit/cancel/timeout paths via `root.after()` scheduling instead of
+  waiting on a human click.
+- The join-device flow's actual passphrase step didn't start using
+  this popup until a follow-up fix on 2026-08-02 (see above) - this
+  entry covers when the popup itself was built and wired into setup.
   See BACKLOG.md.

@@ -3,15 +3,18 @@
 ## Project Overview
 
 **Claude Search Library** is a distributed, offline-first personal knowledge management system that:
-- Collects chat sessions from all Claude interfaces (Claude.ai, VS Code, Cowork)
+- Collects chat sessions from all Claude interfaces (Claude.ai, VS Code, Claude Code, the Claude desktop app, Cowork, local folder)
 - Summarizes sessions into actionable insights using Claude API
 - Stores encrypted summaries + raw chats on GitHub (private repo)
 - Syncs seamlessly across unlimited devices (desktop, laptops, phones, tablets)
-- Provides instant semantic search via local ChromaDB
+- Provides instant hybrid semantic + keyword search (ChromaDB + FTS5)
 - Uses master passphrase + Google Authenticator 2FA for security
-- Auto-merges conflicts via cr-sqlite CRDT
+- Auto-merges conflicts via real cr-sqlite CRDT
 
-**Status**: Under development (10 Claude Code build tasks)
+**Status**: Production — the original 10-task build (see `tasks/`) finished
+long ago; this has been a real, actively-used, actively-hardened tool since.
+See [CHANGELOG.md](CHANGELOG.md) for the full history, [ROADMAP.md](ROADMAP.md)
+for what's still genuinely unbuilt.
 
 ---
 
