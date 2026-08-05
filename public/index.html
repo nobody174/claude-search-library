@@ -156,7 +156,7 @@
       );
     }
 
-    function SetupPage({ onUnlocked }) {
+    function SetupPage({ onUnlocked, sessionExpired }) {
       const [passphrase, setPassphrase] = useState("");
       const [totpCode, setTotpCode] = useState("");
       const [error, setError] = useState(null);
@@ -193,6 +193,11 @@
             <p className="text-sm text-muted text-center">
               Enter your master passphrase and Authenticator code. Nothing is sent to the server except a verification check.
             </p>
+            {sessionExpired && (
+              <p className="text-sm text-accent text-center bg-accent/10 border border-accent/30 rounded px-3 py-2">
+                Your session expired after 30 minutes of inactivity — please unlock again.
+              </p>
+            )}
             <div>
               <label className="block text-sm font-medium mb-1 text-muted" htmlFor="passphrase">
                 Master passphrase
@@ -788,7 +793,7 @@
             const result = await apiClient.importExport(file);
             converted += result.converted;
           }
-          setMessage(`Converted ${converted} conversation(s). Run "cli.py collect" to process them.`);
+          setMessage(`Converted ${converted} conversation(s). Click Sync (or run "cli.py collect") to bring them in.`);
           onImported();
         } catch (err) {
           setMessage(err.message);
@@ -1106,6 +1111,7 @@
         () => window.localStorage.getItem(LOCAL_STORAGE_KEY) === "true"
       );
       const [view, setView] = useState("search");
+      const [sessionExpired, setSessionExpired] = useState(false);
 
       const handleLock = () => {
         apiClient.logout(); // fire-and-forget: invalidate the server-side session too, not just local storage
@@ -1118,10 +1124,15 @@
       // "unlocked" flag, which never expires on its own - without this,
       // the UI would keep rendering as if unlocked while every API call
       // silently 401s. See api.js's request() for where this fires.
+      // Found via a QA/playtester pass: without sessionExpired, the page
+      // just reverts to the Unlock screen with zero explanation, which
+      // reads as the app crashing/resetting rather than an intentional
+      // timeout.
       useEffect(() => {
         const handleExpired = () => {
           window.localStorage.removeItem(LOCAL_STORAGE_KEY);
           window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
+          setSessionExpired(true);
           setUnlocked(false);
         };
         window.addEventListener("csl:session-expired", handleExpired);
@@ -1129,7 +1140,15 @@
       }, []);
 
       if (!unlocked) {
-        return <SetupPage onUnlocked={() => setUnlocked(true)} />;
+        return (
+          <SetupPage
+            sessionExpired={sessionExpired}
+            onUnlocked={() => {
+              setSessionExpired(false);
+              setUnlocked(true);
+            }}
+          />
+        );
       }
 
       return (
