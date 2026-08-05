@@ -82,15 +82,26 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
     requires the user to manually copy the chat text first — doesn't
     remove the labor, just moves where it happens. Correctly rejected
     by the user as not actually solving the problem.
-- Still open, needs genuine rethinking rather than another workaround
-  pass at the same idea. Possible directions worth researching properly
-  (none vetted yet):
-  - On-device automation that reads the screen/accessibility tree
-    (e.g. an iOS Shortcut using accessibility APIs to extract on-screen
-    text) instead of touching claude.ai's API at all — sidesteps the
-    ToS problem since it never talks to Anthropic's servers
-    automatically, but unproven, likely fragile, and may hit Apple's
-    own Shortcuts/Screen Time restrictions.
+- **On-device accessibility/Shortcuts automation — researched and ruled
+  out (2026-08-06, via research agent).** Genuinely investigated, not
+  assumed: no "read screen content" Shortcuts action exists for
+  third-party apps (the closest, "Receive What's On Screen," only
+  works with a handful of Apple-blessed apps that explicitly opt in —
+  Claude's iOS app doesn't); Claude's official App Intent
+  ([Anthropic's own docs](https://support.claude.com/en/articles/10263469-using-claude-app-intents-shortcuts-and-widgets-on-ios))
+  exposes exactly one action, "Ask Claude" (send-only, no read/export
+  action, none found to be planned); iOS 26's new Accessibility Reader
+  is a manual, interactive UI feature with no scriptable hook. A real
+  working alternative does exist — screen-record while scrolling +
+  on-device OCR, the same technique a live App Store app (TextPort)
+  already uses for other chat apps — but it requires the user to
+  manually trigger and scroll through each conversation, every time.
+  **Rejected for the same reason as the one-tap-save idea above**: it
+  reduces labor but doesn't remove the "user has to remember to do it
+  per chat" failure mode that's the actual problem. Apple's sandboxing
+  model has no unattended/scheduled path into another app's content
+  without jailbreaking, and nothing in current iOS changes that.
+- Two directions remain genuinely unvetted, not yet researched:
   - Whether Anthropic offers (or would ever offer) a legitimate
     data-export API for consumer accounts, e.g. as a paid/business tier
     feature — worth just asking Anthropic support directly rather than
@@ -99,7 +110,8 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
     actually required, vs. using the phone purely as a search/reference
     client (per the original CLAUDE.md Key Decision #5) and doing all
     real conversation work on desktop/laptop where official export
-    works fine?
+    works fine? With two of three researched directions now ruled out,
+    this is worth taking seriously rather than as a last resort.
 - Do not schedule implementation work here until a specific approach is
   chosen — this entry exists to make sure the gap stays visible instead
   of being silently dropped.
