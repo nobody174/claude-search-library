@@ -507,6 +507,41 @@ def test_verify_archive_skips_other_devices_raw_paths(db):
     assert not any("no readable raw file" in w for w in result["warnings"])
 
 
+def test_verify_archive_treats_null_raw_path_on_synced_session_as_foreign_device(db):
+    """A NULL raw_file_path on a session that HAS been synced (synced_at
+    set) is the same foreign-device story as an explicit foreign path -
+    e.g. a Claude Code session collected on another device, whose
+    locally-converted transcript file never existed here. Traced from 5
+    real sessions in production data (see BACKLOG.md/CHANGELOG.md
+    2026-08-06) - must not be counted as a genuine "missing raw file"."""
+    session = dict(
+        SAMPLE_SESSION, id="sess-synced-no-raw",
+        raw_file_path=None, synced_at="2026-08-04T03:41:13+00:00",
+    )
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["stats"]["raw_chat_files_missing"] == 0
+    assert not any("no readable raw file" in w for w in result["warnings"])
+
+
+def test_verify_archive_treats_null_raw_path_on_unsynced_session_as_genuinely_missing(db):
+    """A NULL raw_file_path on a session that has NEVER been synced
+    (synced_at is None) is a genuine local anomaly, distinct from the
+    foreign-device case above - this session originated on THIS device
+    and should have had a raw file recorded."""
+    session = dict(
+        SAMPLE_SESSION, id="sess-local-no-raw",
+        raw_file_path=None, synced_at=None,
+    )
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert any("no readable raw file" in w for w in result["warnings"])
+
+
 def test_verify_archive_flags_missing_summary_sidecar_file(db):
     """summary_file_path is the same device-local-path-in-synced-data
     pattern as raw_file_path - same check, same home-dir-scoping."""

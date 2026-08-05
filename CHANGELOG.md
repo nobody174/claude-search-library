@@ -7,6 +7,54 @@ open see [ROADMAP.md](ROADMAP.md) (future features) and
 
 ---
 
+## 2026-08-06, continued — BACKLOG.md review, a real doc-flow diagram, and a genuine "no raw file" fix
+
+**Trigger: going through BACKLOG.md item by item for real suggested
+decisions, rather than the earlier one-line table.** Also added a
+Mermaid flowchart of the actual code flow (traced from source, not a
+paraphrase of the existing high-level architecture summary) - see
+`docs/ARCHITECTURE_FLOW.md`.
+
+- **Unredacted git-history decision reconfirmed** now that going public
+  is concrete: only `claude-search-library` (code) is going public,
+  `claude-search-data` (the real chat archive, where the unredacted
+  pre-fix history actually lives) stays private - so the 2026-08-05 call
+  still holds. Checked the code repo's own history directly for real
+  leaked secrets (none found - only placeholder syntax like `sk-ant-...`
+  in setup instructions).
+- **Root-caused the "5 sessions have no readable raw file" warning
+  precisely, instead of leaving it as an unexplained gap.** All 5 turned
+  out to be real Claude Code sessions synced from the laptop
+  (`synced_at`/`sync_version` confirmed), where `raw_file_path` is
+  `NULL` rather than a foreign-device path - the same underlying fact as
+  the `raw_file_path`/`summary_file_path` foreign-device fix from
+  earlier today, just predating that column being populated consistently
+  across every collector/sync path. Not lost data, not something to
+  search for - this desktop was never going to have
+  `collect_from_claude_code()`'s locally-converted transcript file for a
+  session that ran on a different machine.
+- **Fixed `verify_archive()`'s Check 3** to distinguish a genuinely
+  local anomaly (no raw path, never synced - a real problem) from this
+  expected case (no raw path, but `synced_at` is set - foreign-device,
+  same as an explicit non-local path). Verified against the real
+  122-session library: the "5 sessions no readable raw file" warning is
+  gone, `foreign_device_raw_paths` correctly grew from 56 to 61.
+- **Two BACKLOG.md items turned out to be real, scopeable features, not
+  permanent low-priority friction** - moved to ROADMAP.md: mobile TOTP
+  re-provisioning (re-display an existing device's QR code without
+  redoing full `--join-device` setup - worth doing now that mobile
+  access is a real, used part of the project) and browser-profile chat
+  capture (same LevelDB/Snappy/V8 technique as the already-solved
+  desktop-app collector, applied to a regular Chrome/Edge profile -
+  not needed for the current user's own Claude Code + desktop app
+  workflow, but flagged as worth building if public users lean on
+  claude.ai-via-browser more).
+
+Tests: 332 passed (2 new - the NULL-raw-path-on-synced-vs-unsynced-session
+distinction).
+
+---
+
 ## 2026-08-06 — Security Auditor, Code Style Enforcer, and Release Manager passes
 
 Three roles run back-to-back per the project's own AI-role workflow,

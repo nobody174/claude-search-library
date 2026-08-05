@@ -928,7 +928,7 @@ class Storage:
         _log(3, total_checks, "Content hash validation")
         try:
             samples = self.conn.execute(
-                "SELECT id, content_hash, raw_file_path FROM sessions WHERE content_hash IS NOT NULL"
+                "SELECT id, content_hash, raw_file_path, synced_at FROM sessions WHERE content_hash IS NOT NULL"
             ).fetchall()
 
             checked = 0
@@ -941,7 +941,27 @@ class Storage:
                 if raw_path and not _path_is_local(raw_path, home_str):
                     foreign_device_paths += 1
                     continue
-                if not raw_path or not os.path.exists(raw_path):
+                if not raw_path:
+                    # A NULL/empty raw_file_path on a session that's been
+                    # synced (synced_at set) is the same foreign-device
+                    # story as above, just from before this column was
+                    # populated consistently across every collector/sync
+                    # path - e.g. collect_from_claude_code() writes a
+                    # locally-converted transcript file and points
+                    # raw_file_path at it, which never existed on a device
+                    # that only ever *received* the session via CRDT sync.
+                    # Only a session that's never been synced at all and
+                    # still has no raw path is a genuine local anomaly
+                    # worth flagging - real evidence, not a guess: found by
+                    # tracing 5 real "no raw file" sessions and confirming
+                    # every one had synced_at set and originated on another
+                    # device (see BACKLOG.md/CHANGELOG.md 2026-08-06).
+                    if row["synced_at"]:
+                        foreign_device_paths += 1
+                    else:
+                        missing_raw_files += 1
+                    continue
+                if not os.path.exists(raw_path):
                     missing_raw_files += 1
                     continue
                 try:
