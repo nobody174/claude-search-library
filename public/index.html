@@ -1108,10 +1108,25 @@
       const [view, setView] = useState("search");
 
       const handleLock = () => {
+        apiClient.logout(); // fire-and-forget: invalidate the server-side session too, not just local storage
         window.localStorage.removeItem(LOCAL_STORAGE_KEY);
         window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
         setUnlocked(false);
       };
+
+      // The server-side session (30 min) can expire independently of this
+      // "unlocked" flag, which never expires on its own - without this,
+      // the UI would keep rendering as if unlocked while every API call
+      // silently 401s. See api.js's request() for where this fires.
+      useEffect(() => {
+        const handleExpired = () => {
+          window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+          window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
+          setUnlocked(false);
+        };
+        window.addEventListener("csl:session-expired", handleExpired);
+        return () => window.removeEventListener("csl:session-expired", handleExpired);
+      }, []);
 
       if (!unlocked) {
         return <SetupPage onUnlocked={() => setUnlocked(true)} />;

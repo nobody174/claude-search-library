@@ -1,8 +1,10 @@
 """Flask REST API server for Claude Search Library."""
 from __future__ import annotations
 
+import secrets
 import time
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
@@ -27,6 +29,67 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = Flask(__name__)
 CORS(app, origins=["localhost", "127.0.0.1"])
+
+# --- Session gate ------------------------------------------------------
+# Every route except the ones in _PUBLIC_ROUTES used to be reachable with
+# zero credentials at all: /setup and /sync were the only routes that ever
+# checked a passphrase/TOTP, so anyone who could reach this server's port
+# (which binds 0.0.0.0 by design, for LAN/phone access - see CLAUDE.md's
+# iPhone setup instructions) could read the full search index, session
+# detail, and cost data, or trigger a real-money reprocess call, without
+# ever proving they know the passphrase. The web UI's "Unlock Device"
+# screen was purely client-side (a localStorage flag), never enforced
+# server-side. Found via a full project security review, closed here with
+# a short-lived server-side session issued only after /setup verifies the
+# real passphrase + TOTP.
+#
+# In-memory only (not persisted) - a server restart requires re-unlocking,
+# which is the right failure mode for a security boundary. Token ->
+# expiry timestamp; SESSION_TTL_SECONDS matches crypto.py's existing
+# SESSION_CACHE_TTL_SECONDS convention for "how long is a personal-machine
+# unlock considered valid" so the two don't drift out of sync with each
+# other for no reason.
+SESSION_COOKIE_NAME = "csl_session"
+SESSION_TTL_SECONDS = 30 * 60
+_sessions: dict[str, float] = {}
+
+# GET / and GET /src/<path> must stay reachable pre-unlock - that's the
+# page and script that render the Unlock Device screen itself. /setup
+# must stay reachable to actually perform the unlock.
+_PUBLIC_ROUTES = {("GET", "/"), ("POST", "/setup")}
+
+
+def _create_session() -> str:
+    token = secrets.token_urlsafe(32)
+    _sessions[token] = time.time() + SESSION_TTL_SECONDS
+    return token
+
+
+def _session_valid(token: Optional[str]) -> bool:
+    if not token or token not in _sessions:
+        return False
+    if time.time() > _sessions[token]:
+        del _sessions[token]
+        return False
+    return True
+
+
+def _invalidate_session(token: Optional[str]) -> None:
+    if token:
+        _sessions.pop(token, None)
+
+
+@app.before_request
+def _require_session():
+    if request.method == "OPTIONS":
+        return None  # CORS preflight
+    if (request.method, request.path) in _PUBLIC_ROUTES:
+        return None
+    if request.method == "GET" and request.path.startswith("/src/"):
+        return None
+    if not _session_valid(request.cookies.get(SESSION_COOKIE_NAME)):
+        return jsonify({"error": "unlock required"}), 401
+    return None
 
 
 @app.route("/", methods=["GET"])
@@ -79,7 +142,27 @@ def setup_endpoint():
     if not crypto.verify_totp_code(totp_secret, totp_code):
         return jsonify({"success": False, "error": "invalid TOTP code"}), 401
 
-    return jsonify({"success": True})
+    response = jsonify({"success": True})
+    response.set_cookie(
+        SESSION_COOKIE_NAME, _create_session(),
+        max_age=SESSION_TTL_SECONDS, httponly=True, samesite="Strict",
+    )
+    return response
+
+
+@app.route("/logout", methods=["POST"])
+def logout_endpoint():
+    """Invalidate this browser's session server-side. Called from the web
+    UI's Lock button - previously Lock only cleared client-side storage,
+    so a session cookie captured before locking (e.g. by someone else on
+    the same LAN who'd already reached an unlocked tab) stayed valid on
+    the server indefinitely. Always returns success even with no/an
+    already-invalid cookie, since the end state (no valid session) is the
+    same either way."""
+    _invalidate_session(request.cookies.get(SESSION_COOKIE_NAME))
+    response = jsonify({"success": True})
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
 
 
 @app.route("/search", methods=["GET"])

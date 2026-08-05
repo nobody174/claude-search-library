@@ -23,6 +23,17 @@ async function request(path, options = {}) {
     const error = new Error(message);
     error.status = response.status;
     error.body = body;
+    // A 401 from anything other than /setup itself (wrong-credentials
+    // there is a normal, expected 401, not an expired session) means the
+    // server-side session cookie is missing or expired - which can now
+    // happen independently of the client's own "unlocked" flag (that
+    // flag has no expiry of its own). Without this, the UI would keep
+    // rendering as if unlocked while every API call silently 401s.
+    // window.dispatchEvent (not a direct call) so this plain script file
+    // doesn't need a React import to notify the app.
+    if (response.status === 401 && path !== "/setup") {
+      window.dispatchEvent(new CustomEvent("csl:session-expired"));
+    }
     throw error;
   }
 
@@ -44,6 +55,21 @@ async function setup(passphrase, totpCode) {
     return { success: true, ...result };
   } catch (error) {
     return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Invalidate this browser's session server-side (the session cookie
+ * /setup issues on success). Locking used to only clear client-side
+ * storage, leaving the actual server-side session valid until it expired
+ * on its own - this makes Lock a real server-enforced action.
+ */
+async function logout() {
+  try {
+    await request("/logout", { method: "POST" });
+  } catch (error) {
+    // Best-effort - the client-side lock (clearing localStorage) still
+    // happens regardless of whether this call succeeds.
   }
 }
 
@@ -200,7 +226,7 @@ async function getRelated(sessionId) {
 // Exposed as a global for the CDN-based React app (public/index.html) and
 // as CommonJS exports for anything that runs under Node/Jest.
 const api = {
-  setup, search, getSession, getStats, getDevices, approveReview,
+  setup, logout, search, getSession, getStats, getDevices, approveReview,
   getHealth, sync, importSessions, importExport, getCosts,
   getNeedsReview, reprocessReview, getRelated,
 };

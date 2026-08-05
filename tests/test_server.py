@@ -34,7 +34,81 @@ def client(tmp_path, monkeypatch):
 
     server.app.config["TESTING"] = True
     with server.app.test_client() as c:
+        # Every route except /setup and the static/index routes now
+        # requires a valid session cookie (see server.py's before_request
+        # session gate) - manufacture one directly rather than going
+        # through a real /setup call, which needs real GitHub-hosted
+        # encrypted TOTP secrets that don't exist in a test environment.
+        token = server._create_session()
+        c.set_cookie(server.SESSION_COOKIE_NAME, token)
         yield c
+
+
+@pytest.fixture
+def unauth_client(tmp_path, monkeypatch):
+    """Same setup as `client`, but with no session cookie - for asserting
+    the security gate itself actually rejects unauthenticated requests."""
+    import src.storage as storage_module
+    monkeypatch.setattr(storage_module, "DEFAULT_DB_PATH", tmp_path / "test.db")
+    server.app.config["TESTING"] = True
+    with server.app.test_client() as c:
+        yield c
+
+
+def test_protected_routes_reject_without_a_session(unauth_client):
+    """Regression test for a real finding from a full security review: every
+    route except /setup and the static/index routes used to be reachable
+    with zero credentials at all - confirmed live via a bare curl call
+    that returned real search results and cost data with no auth
+    whatsoever. The web UI's "Unlock Device" screen was purely
+    client-side (a localStorage flag), never enforced server-side."""
+    assert unauth_client.get("/search?q=test").status_code == 401
+    assert unauth_client.get("/costs").status_code == 401
+    assert unauth_client.get("/stats").status_code == 401
+    assert unauth_client.get("/health").status_code == 401
+    assert unauth_client.get("/devices").status_code == 401
+    assert unauth_client.post("/review/reprocess", json={}).status_code == 401
+
+
+def test_public_routes_work_without_a_session(unauth_client):
+    """/, /src/*, and /setup itself must stay reachable pre-unlock - that's
+    the page/script that render the Unlock Device screen, and the
+    endpoint that actually performs the unlock."""
+    assert unauth_client.get("/").status_code == 200
+    assert unauth_client.get("/src/api.js").status_code == 200
+    # /setup reaches its own handler (which then 401s on bad credentials,
+    # not because the session gate blocked it before the handler ran).
+    resp = unauth_client.post("/setup", json={"passphrase": "x", "totp_code": "000000"})
+    assert resp.status_code in (400, 401)
+    assert resp.get_json().get("error") != "unlock required"
+
+
+def test_setup_success_issues_a_session_cookie(unauth_client, monkeypatch):
+    monkeypatch.setattr(server.crypto, "_fetch_secrets_from_github", lambda: "encrypted-blob")
+    monkeypatch.setattr(server.crypto, "_derive_passphrase_only_key", lambda p: b"key")
+    monkeypatch.setattr(server.crypto, "decrypt_data", lambda blob, key: b"totp-secret")
+    monkeypatch.setattr(server.crypto, "verify_totp_code", lambda secret, code: True)
+
+    resp = unauth_client.post("/setup", json={"passphrase": "correct", "totp_code": "123456"})
+    assert resp.status_code == 200
+    assert unauth_client.get_cookie(server.SESSION_COOKIE_NAME) is not None
+
+    # The session just issued now grants access to a previously-401'd route.
+    assert unauth_client.get("/stats").status_code == 200
+
+
+def test_logout_invalidates_the_session(client):
+    assert client.get("/stats").status_code == 200
+    resp = client.post("/logout")
+    assert resp.status_code == 200
+    assert client.get("/stats").status_code == 401
+
+
+def test_expired_session_is_rejected(client, monkeypatch):
+    # Simulate the session's TTL having already elapsed.
+    for token in list(server._sessions):
+        server._sessions[token] = 0
+    assert client.get("/stats").status_code == 401
 
 
 def test_index_page_serves_web_ui(client):
