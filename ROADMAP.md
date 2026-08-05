@@ -101,17 +101,87 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
   per chat" failure mode that's the actual problem. Apple's sandboxing
   model has no unattended/scheduled path into another app's content
   without jailbreaking, and nothing in current iOS changes that.
-- Two directions remain genuinely unvetted, not yet researched:
-  - Whether Anthropic offers (or would ever offer) a legitimate
-    data-export API for consumer accounts, e.g. as a paid/business tier
-    feature — worth just asking Anthropic support directly rather than
-    reverse-engineering around them.
+- **Forcing the desktop app to bulk-cache every conversation via CDP
+  automation — researched and ruled out empirically (2026-08-06).** The
+  desktop app's local IndexedDB cache (what `collect_from_claude_desktop()`
+  reads) only populates for a conversation once a human opens it — so
+  scripting the desktop app to auto-open every sidebar conversation
+  (via Chrome DevTools Protocol, e.g. Puppeteer/Playwright) would force
+  full history into the existing collector's data source, unattended.
+  Directly tested, not assumed: launching the installed Windows
+  Claude.exe (MSIX-packaged) with `--remote-debugging-port=9222`
+  produces zero surviving processes every time (vs. a clean multi-process
+  launch without the flag) — confirmed reproducible. MSIX's app-container
+  sandboxing rejects the flag outright. Dead end on this platform.
+- **Automating Anthropic's official "Export your Claude data" flow
+  end-to-end (trigger + retrieve, zero human interaction) — researched
+  and ruled out (2026-08-06).** This export is account-wide, including
+  iPhone-originated conversations — the one path that would have
+  actually closed the iPhone gap specifically. Blocked by law/policy,
+  not technology: Anthropic's Consumer Terms (§3) ban "automated or
+  non-human means" of accessing claude.ai with no exception for a user
+  automating access to their own account/data, and 2026 enforcement
+  (the "OpenClaw" crackdown on third-party harnesses) shows this is
+  actively policed, not a dead-letter clause. Confirmed separately: the
+  export is delivered by email only (no in-website download panel
+  found), 24-hour link expiry, so even the one easy-to-automate piece
+  (IMAP polling for the download link) can't stand alone — it doesn't
+  solve triggering the export in the first place, which is the actually
+  -prohibited step.
+- **Checked whether anyone else has solved this — genuinely unsolved,
+  not a known problem with a known fix this project missed (2026-08-06).**
+  Anthropic's own Help Center is explicit: "Export is available on the
+  web app and Claude Desktop only. iOS and Android do not currently
+  support exports." No hidden Shortcuts/App Intent read capability
+  found. No consumer community forum for claude.ai (only the
+  developer-focused `anthropics/claude-code` repo, which has 3 separate
+  open feature requests asking for cross-surface history access -
+  #12858, #30673, #55787 - confirming this is a known pain point
+  Anthropic hasn't shipped a fix for, not something obscure). Reddit
+  searches returned nothing. Every existing third-party export tool
+  operates on the desktop/browser session, never the iOS app.
+- **Two things remain, not yet done:**
+  - **Draft message to Anthropic, parked as a genuine last resort** (not
+    sent yet — see below) asking whether a legitimate, ToS-sanctioned
+    consumer export/sync API for iOS is available or planned. Worth
+    trying since every self-built automated path is now confirmed
+    either technically dead or ToS-blocked - this is the one lead never
+    actually attempted.
   - Reconsidering scope: is capturing *phone-originated* conversations
     actually required, vs. using the phone purely as a search/reference
     client (per the original CLAUDE.md Key Decision #5) and doing all
     real conversation work on desktop/laptop where official export
-    works fine? With two of three researched directions now ruled out,
-    this is worth taking seriously rather than as a last resort.
+    works fine? With all three researched automation directions now
+    ruled out (2 technical, 1 legal), this is the practical fallback if
+    Anthropic has no plans here — not a first resort, but a real one.
 - Do not schedule implementation work here until a specific approach is
   chosen — this entry exists to make sure the gap stays visible instead
   of being silently dropped.
+
+### Draft message to Anthropic (not sent — parked for if/when this becomes the last resort)
+
+> Subject: Legitimate/sanctioned way to export or sync Claude iOS conversation history?
+>
+> Hi — I'm building a personal, local-first tool that archives and
+> searches my own Claude chat history across the devices I use (desktop
+> app, Claude Code, Cowork). It works well for everything except the
+> iOS app: Settings → Export Data is desktop/web-only, and the iOS
+> Shortcuts "Ask Claude" App Intent is send-only (no read/export
+> action). I've deliberately ruled out unofficial API scraping and any
+> automated interaction with claude.ai's web session, since your
+> Consumer Terms §3 explicitly prohibit automated/non-human access with
+> no exception I could find for a user accessing their own data.
+>
+> Is there, or is there planned to be, any sanctioned way for a
+> consumer account to programmatically retrieve their own conversation
+> history from the iOS app — e.g. a scoped API endpoint gated by a real
+> API key, or an export trigger reachable outside the manual
+> Settings → Export Data + email-link flow? I'd rather ask directly than
+> build something that risks violating your terms.
+>
+> Thanks for your time.
+
+*(Adjust tone/detail before actually sending — this is a first draft,
+not final copy. Send via Anthropic's support channel, not a public
+GitHub issue, since it's an account-specific question, not a bug
+report.)*
