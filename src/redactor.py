@@ -8,10 +8,8 @@ redactions for manual review.
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import re
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -52,32 +50,23 @@ def _mask(value: str) -> str:
     return value[:3] + "*" * (len(value) - 6) + value[-3:]
 
 
-def _ensure_redaction_log_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS redaction_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            redaction_type TEXT NOT NULL,
-            original_value TEXT NOT NULL,
-            redacted_value TEXT NOT NULL,
-            confidence_score REAL NOT NULL,
-            redacted_at TEXT NOT NULL,
-            manually_reviewed INTEGER DEFAULT 0
-        )
-        """
-    )
-    conn.commit()
-
-
 def _write_redaction_log(events: list, db_path: Optional[str] = None) -> None:
+    """Append redaction events to the `redaction_log` table.
+
+    Uses storage.init_db() rather than hand-rolling a CREATE TABLE here -
+    this module used to define its own copy of the redaction_log schema,
+    independent of storage.py's canonical one. Two sources of truth for
+    one table's shape is exactly how schema drift happens; there's only
+    one now.
+    """
     if not events:
         return
-    path = Path(db_path) if db_path else DB_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    from src.storage import init_db
+
+    path = str(Path(db_path)) if db_path else str(DB_PATH)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    conn = init_db(path)
     try:
-        _ensure_redaction_log_table(conn)
         conn.executemany(
             """
             INSERT INTO redaction_log

@@ -3,13 +3,27 @@ import sqlite3
 import pytest
 
 from src import redactor
+from src.storage import Storage
+
+# redaction_log.session_id has a real FK to sessions(id) (the canonical
+# schema in storage.py - redactor.py used to define its own separate,
+# looser copy of this table with no FK at all; that duplication is what
+# got fixed). Every test below uses a standalone session_id with no real
+# session behind it, so each one needs a minimal row seeded first.
+TEST_SESSION_IDS = [f"s{n}" for n in range(1, 15)]
 
 
 @pytest.fixture(autouse=True)
 def redirect_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(redactor, "LOG_PATH", tmp_path / "redaction.log")
-    monkeypatch.setattr(redactor, "DB_PATH", tmp_path / "claude_search.db")
+    db_path = tmp_path / "claude_search.db"
+    monkeypatch.setattr(redactor, "DB_PATH", db_path)
     redactor.logger.handlers.clear()
+    with Storage(str(db_path)) as db:
+        for session_id in TEST_SESSION_IDS:
+            db.insert_session({
+                "id": session_id, "source": "test", "created_at": "2026-01-01T00:00:00Z",
+            })
     yield
 
 
@@ -103,6 +117,8 @@ def test_original_value_is_masked_not_stored_raw():
 
 def test_writes_to_sqlite_redaction_log(tmp_path):
     db_path = tmp_path / "test.db"
+    with Storage(str(db_path)) as db:
+        db.insert_session({"id": "s13", "source": "test", "created_at": "2026-01-01T00:00:00Z"})
     text = f"ghp_{'q' * 36}"
     redactor.redact_summary({"session_tldr": text}, "s13", db_path=str(db_path))
 

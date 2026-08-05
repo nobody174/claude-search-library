@@ -400,9 +400,35 @@ def _summarize_with_backoff(chat_dict: dict, api_key: str, results: dict, db) ->
         try:
             summary = summarize_chat(chat_dict, api_key, usage_sink=usage_calls)
             _record_call_costs(session_id, usage_calls, db)
+
+            # Redact before anything gets stored, indexed, or embedded - not
+            # just logged. This was previously built (src/redactor.py) and
+            # unit-tested but never actually called from the pipeline, so
+            # every summary this project ever produced went out unredacted
+            # despite CLAUDE.md's Security section stating otherwise. Found
+            # via a full project review, closed here.
+            from src.redactor import redact_summary
+
+            summary, redaction_events = redact_summary(summary, session_id)
+
             sidecar_path = _save_summary_sidecar(session_id, summary)
             db.store_summary(session_id, summary)
             db.update_session(session_id, {"summary_file_path": sidecar_path})
+
+            if summary.get("needs_review"):
+                # Matches CLAUDE.md's documented behavior: "sessions with
+                # more than 3 redactions are flagged for manual review
+                # instead of being indexed automatically" - skip
+                # search_index/ChromaDB so a heavily-redacted summary isn't
+                # surfaced by search before a human has looked at it.
+                db.mark_for_review(session_id, summary["review_reason"])
+                results["needs_review"].append(session_id)
+                logger.info(
+                    "session_id=%s status=needs_review reason=%s",
+                    session_id, summary["review_reason"],
+                )
+                return False
+
             db.mark_as_processed(session_id, "processed")
             _index_for_search(session_id, summary, db)
             return True

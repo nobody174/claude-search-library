@@ -106,8 +106,8 @@ def semantic_search(query: str, top_k: int = 10, chroma_path: Optional[str] = No
     """Run a semantic search against embedded session summaries.
 
     Returns a list of {session_id, relevance_score, metadata} dicts,
-    ordered by relevance (closest first). relevance_score is derived from
-    ChromaDB's cosine distance as (1 - distance), so higher is more similar.
+    ordered by relevance (closest first). relevance_score is normalized
+    to [0, 1] (the UI renders it directly as a percentage).
     """
     _setup_file_logging()
     try:
@@ -126,11 +126,27 @@ def semantic_search(query: str, top_k: int = 10, chroma_path: Optional[str] = No
         output.append(
             {
                 "session_id": session_id,
-                "relevance_score": 1 - distance,
+                "relevance_score": _distance_to_relevance(distance),
                 "metadata": metadata,
             }
         )
     return output
+
+
+def _distance_to_relevance(distance: float) -> float:
+    """Map ChromaDB cosine distance to a [0, 1] relevance score.
+
+    In cosine space, distance = 1 - cosine_similarity, and cosine
+    similarity ranges [-1, 1], so distance actually ranges [0, 2] - not
+    [0, 1] as `1 - distance` alone assumes. That bug shipped a
+    relevance_score the web UI renders directly as a percentage
+    (`(score * 100).toFixed(0)}%`), producing real search results with
+    240%+ "relevance" in production. The correct normalization is
+    `1 - distance / 2` (equivalently `(similarity + 1) / 2`); clamped
+    defensively in case of floating-point edge values just past the
+    theoretical bounds.
+    """
+    return max(0.0, min(1.0, 1 - distance / 2))
 
 
 def delete_embedding(session_id: str, chroma_path: Optional[str] = None) -> bool:

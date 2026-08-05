@@ -369,6 +369,23 @@ def health_endpoint():
     try:
         with Storage() as db:
             result = db.verify_archive(verbose=False)
+
+        # Real device registration lives in sync.py's sync_metadata.json
+        # inside the git repo, not the SQL sync_metadata table
+        # verify_archive() checks - storage.py can't read that file itself
+        # without a circular import (sync.py already imports storage.py),
+        # so this stat is corrected here instead, at the one layer that
+        # already sees both. The SQL-table check inside verify_archive()
+        # is left as-is (honest about what it actually checks - that
+        # table just isn't what tracks devices in practice).
+        try:
+            from src.sync import DEFAULT_REPO_PATH, _read_sync_metadata
+
+            metadata = _read_sync_metadata(DEFAULT_REPO_PATH)
+            result["stats"]["devices_registered"] = len(metadata.get("devices", {}))
+        except Exception as e:
+            app.logger.warning("Failed to read real device count from sync_metadata.json: %s", e)
+
         return jsonify(result), 200 if result["healthy"] else 503
     except Exception as e:
         return jsonify({"error": str(e), "healthy": False}), 500
