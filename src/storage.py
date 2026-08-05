@@ -196,10 +196,24 @@ def _migrate_v1_to_v2_crdt_schema(conn: sqlite3.Connection) -> None:
     """
     logger.info("Migrating sessions/summaries to the cr-sqlite-compatible schema (one-time)")
 
+    # legacy_alter_table=ON stops SQLite's default ALTER-TABLE-RENAME
+    # behavior of rewriting REFERENCES clauses in *other* tables
+    # (search_index, redaction_log, api_costs all say
+    # "REFERENCES sessions(id)") to point at the new name. Without this,
+    # renaming sessions -> sessions_v1_old permanently repoints those
+    # three tables' FKs at sessions_v1_old, which stops existing once
+    # this function drops it a few lines down - breaking every write to
+    # search_index/redaction_log/api_costs with
+    # "no such table: sessions_v1_old" until manually repaired. Since
+    # this function always ends with a table actually named `sessions`
+    # again, those other tables' plain-text "REFERENCES sessions(id)"
+    # was already correct and never needed touching.
+    conn.execute("PRAGMA legacy_alter_table = ON")
     conn.executescript("""
         ALTER TABLE sessions RENAME TO sessions_v1_old;
         ALTER TABLE summaries RENAME TO summaries_v1_old;
     """)
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.executescript(_SCHEMA)  # recreates sessions/summaries with the new constraint shape
 
     conn.execute(f"""
