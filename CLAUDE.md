@@ -737,6 +737,11 @@ around, given real usage was about to start.
 
 ## Session log (2026-08-05, continued — full project review + fix cascade)
 
+> **Picking this up on the desktop machine? Read ROADMAP.md #10 first** —
+> it has the required migration order (code repo before data repo) and a
+> table of every real, still-open item from this session, so nothing
+> gets silently missed.
+
 **Trigger: after the cr-sqlite work, ran a genuine "Project Reviewer, full
 analysis" pass against the whole codebase, then worked the findings
 through a deliberate sequence of roles** (Implementer/Fixer → Security

@@ -447,3 +447,52 @@ Features to implement after public launch:
 - Do not schedule implementation work here until a specific approach is
   chosen — this entry exists to make sure the gap stays visible instead
   of being silently dropped.
+
+## 10. Desktop migration + open items from the 2026-08-05 full review cascade
+
+**Read this before doing anything else on the desktop machine.** A full
+project review (Project Reviewer → Implementer/Fixer → Security Auditor
+→ QA/Playtester → Devil's Advocate → Design Critic → Documentation
+Architect → Release Manager → Project Reviewer round 2) ran on the
+laptop on 2026-08-05, real cr-sqlite CRDT migration shipped and ran for
+real, and a critical unauthenticated-API bug was found and fixed. Full
+detail is in CLAUDE.md's two 2026-08-05 session log entries; this is the
+action-item summary.
+
+### Required action, in order
+1. **`git pull` the code repo FIRST**, before ever running the app
+   against the `claude-search-data` repo on desktop. The old,
+   pre-migration desktop code doesn't know the sync transport changed
+   shape (whole-row files → cr-sqlite changesets) - it would silently
+   read stale pre-migration files and report success while missing
+   everything pushed since. A `sync_protocol_version` guard (shipped
+   2026-08-05) protects every *future* transition like this
+   automatically, but can't protect this specific one retroactively -
+   old code has no way to know to check anything at all. This is why
+   step 1 must come first, not a suggestion.
+2. Run the app once locally on desktop - `init_db()` will automatically
+   migrate `library.db`'s schema (SCHEMA_VERSION 1 → 2) and mark
+   `sessions`/`summaries` as real CRR tables, same validated procedure
+   used on the laptop. **Back up desktop's `library.db` first**, same as
+   the laptop migration did.
+3. Pull from GitHub (brings in everything the laptop already pushed -
+   62 sessions, all now redacted).
+4. Push (contributes anything desktop has that the laptop doesn't).
+5. Verify: `/health` should show `healthy: true` and real
+   `devices_registered` (2, once both devices have synced at least once
+   post-migration).
+
+### Real, still-open findings (not fixed, deliberately deferred or awaiting your decision)
+
+| Finding | Severity | Status |
+|---|---|---|
+| No TLS on `server.py` — session cookie crosses the LAN in cleartext | Medium | Known, accepted for now (see CLAUDE.md Known Blockers). Real fix needs cert-management design work, not a quick patch. |
+| `server.py`'s `_sessions`/`_setup_attempts` in-memory maps are never proactively pruned of stale entries (only lazily, on next access) | Low | Not fixed - negligible at personal scale, but real. Cheap fix later: a periodic sweep or cap on dict size. |
+| 114 stale pre-migration files still sitting in `claude-search-data`'s `encrypted_sessions/`/`encrypted_summaries/` directories | Low-Medium | **Awaiting your decision** - flagged during the Release Manager pass, never confirmed to delete. Now fully superseded by the changeset stream; safe to remove, but real repo content, so left alone pending an explicit yes. |
+| Every summary pushed *before* the 2026-08-05 redaction fix is still unredacted in `claude-search-data`'s git history | Low | **Decided, not fixed**: leave git history alone (private repo, Fernet-encrypted, real exposure is low), reprocess going forward instead - already done for the laptop's 56 reprocessable sessions. Revisit only if you actually want a history rewrite later. |
+| 5 real sessions (+1 known fake `test-session-001` fixture row) have no readable raw file, so their pre-redaction-fix summaries can't be regenerated | Low | Pre-existing, not new. Same sessions `/health` has flagged as "no readable raw file" all along. Nothing to do unless the original raw exports turn up somewhere. |
+| Genuinely simultaneous (not just sequential) CRDT writes are proven safe (deterministic convergence, no corruption) but only for one tested scenario (competing inserts of the same new row) | Low | Real evidence exists, not exhaustive. Fine to leave; revisit only if a real multi-device conflict ever looks wrong. |
+
+None of these block using the app normally. The TLS and stale-files items
+are the two worth a real decision at some point; the rest are either
+already-decided or genuinely low-stakes.
