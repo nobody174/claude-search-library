@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Local instance config (copy of config_template.yaml, real per-device values)
+config.yaml
+
 # Master Passphrase (NEVER COMMIT)
 .claude-search-library/
 
