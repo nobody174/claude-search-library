@@ -490,5 +490,5 @@ features live in [ROADMAP.md](ROADMAP.md).
 ---
 
 **Last Updated**: August 5, 2026
-**Author**: Vartdal (nobody174)
+**Author**: nobody174
 **License**: MIT

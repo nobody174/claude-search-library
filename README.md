@@ -280,6 +280,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Author
 
-Built by Vartdal ([@nobody174](https://github.com/nobody174)).
+Built by [@nobody174](https://github.com/nobody174).
 
 Built with Claude Code. Tested on production. Ready for public launch.

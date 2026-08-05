@@ -1,3 +1,12 @@
+#
+# Claude Search Library
+# Author:  nobody174
+# Repo:    https://github.com/nobody174/claude-search-library
+# Patreon: https://www.patreon.com/c/Nobody174
+# License: MIT
+# "It's never too late to give up!"
+#
+
 """Command-line interface for Claude Search Library."""
 from __future__ import annotations
 
@@ -332,3 +341,5 @@ def sync(pull: bool, push: bool, watch: bool, no_collect: bool) -> None:
 
 if __name__ == "__main__":
     cli()
+
+# Built with assistance from Claude Code by Anthropic.
