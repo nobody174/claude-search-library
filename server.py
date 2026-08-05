@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
@@ -13,6 +14,16 @@ from src.storage import Storage
 
 PUBLIC_DIR = Path(__file__).resolve().parent / "public"
 SRC_DIR = Path(__file__).resolve().parent / "src"
+
+# python-dotenv has been a listed dependency since day one but was never
+# actually invoked anywhere - every prior run of this server only ever
+# saw ANTHROPIC_API_KEY/etc because a human (or an agent) manually
+# exported .env into the shell first. Loading it here means server.py
+# also works when double-clicked (e.g. from a .bat launcher), which has
+# no shell environment to inherit from. load_dotenv() is a no-op if the
+# vars are already set (e.g. by that same manual shell export), so this
+# doesn't change behavior for anyone already doing that.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = Flask(__name__)
 CORS(app, origins=["localhost", "127.0.0.1"])

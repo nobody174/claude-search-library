@@ -4,8 +4,16 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 import click
+from dotenv import load_dotenv
+
+# See server.py's matching load_dotenv() call for why this is needed even
+# though python-dotenv has been a listed dependency since day one: without
+# it, this only ever worked because a human/agent manually exported .env
+# into the shell first.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # Windows consoles default to a legacy codepage (e.g. cp1252) that can't
 # encode characters like the em-dashes and arrows Claude's summaries often

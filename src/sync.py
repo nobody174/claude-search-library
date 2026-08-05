@@ -514,6 +514,11 @@ class SyncWorker:
 def main() -> None:
     import argparse
 
+    from dotenv import load_dotenv
+
+    # See server.py's matching load_dotenv() call.
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
     parser = argparse.ArgumentParser(description="Claude Search Library sync")
     parser.add_argument("--pull", action="store_true", help="Pull only")
     parser.add_argument("--push", action="store_true", help="Push only")
