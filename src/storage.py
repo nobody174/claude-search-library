@@ -934,19 +934,24 @@ class Storage:
             errors.append(f"Hash validation error: {e}")
             checks_failed += 1
 
-        # Check 4: Raw chat files exist for every session that references one.
-        # raw_file_path is a device-local absolute path that rides along in
-        # the synced sessions table (CRDT), so a session pulled from another
-        # device always has a path this device never had and was never
-        # supposed to have - that's not a missing file, it's a different
-        # device's local file. Only count paths under *this* device's home
-        # dir as real "should exist, doesn't" findings (see _path_is_local).
-        _log(4, total_checks, "Raw chat files validation")
+        # Check 4: Raw chat files, and summary sidecar files, exist for every
+        # session that references one. Both raw_file_path and
+        # summary_file_path are device-local absolute paths that ride along
+        # in the synced sessions table (CRDT) - a session pulled from
+        # another device always has paths this device never had and was
+        # never supposed to have. That's not a missing file, it's a
+        # different device's local file. Only count paths under *this*
+        # device's home dir as real "should exist, doesn't" findings (see
+        # _path_is_local). summary_file_path wasn't checked at all until
+        # now - same latent bug class as raw_file_path, just dormant since
+        # nothing previously read it for cross-device validation.
+        _log(4, total_checks, "Raw chat + summary sidecar file validation")
         try:
+            home_str = str(Path.home())
+
             rows = self.conn.execute(
                 "SELECT id, raw_file_path FROM sessions WHERE raw_file_path IS NOT NULL"
             ).fetchall()
-            home_str = str(Path.home())
             local_rows = [r for r in rows if _path_is_local(r["raw_file_path"], home_str)]
             missing = [r["id"] for r in local_rows if not os.path.exists(r["raw_file_path"])]
 
@@ -955,9 +960,20 @@ class Storage:
             if missing:
                 warnings.append(f"{len(missing)} session(s) reference a raw chat file that no longer exists")
 
+            summary_rows = self.conn.execute(
+                "SELECT id, summary_file_path FROM sessions WHERE summary_file_path IS NOT NULL"
+            ).fetchall()
+            local_summary_rows = [r for r in summary_rows if _path_is_local(r["summary_file_path"], home_str)]
+            missing_summaries = [r["id"] for r in local_summary_rows if not os.path.exists(r["summary_file_path"])]
+
+            stats["sessions_with_summary_path"] = len(local_summary_rows)
+            stats["summary_sidecar_files_missing"] = len(missing_summaries)
+            if missing_summaries:
+                warnings.append(f"{len(missing_summaries)} session(s) reference a summary sidecar file that no longer exists")
+
             checks_passed += 1
         except Exception as e:
-            errors.append(f"Raw chat files check error: {e}")
+            errors.append(f"Raw/summary file check error: {e}")
             checks_failed += 1
 
         # Check 5: JSONL mirror is readable and internally valid

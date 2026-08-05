@@ -507,6 +507,31 @@ def test_verify_archive_skips_other_devices_raw_paths(db):
     assert not any("no readable raw file" in w for w in result["warnings"])
 
 
+def test_verify_archive_flags_missing_summary_sidecar_file(db):
+    """summary_file_path is the same device-local-path-in-synced-data
+    pattern as raw_file_path - same check, same home-dir-scoping."""
+    missing_local_path = str(Path.home() / ".claude-search-library" / "summaries" / "does-not-exist.json")
+    session = dict(SAMPLE_SESSION, id="sess-missing-summary", summary_file_path=missing_local_path)
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["stats"]["summary_sidecar_files_missing"] == 1
+    assert any("summary sidecar file that no longer exists" in w for w in result["warnings"])
+
+
+def test_verify_archive_skips_other_devices_summary_paths(db):
+    foreign_path = "/completely/different/machine/summaries/abc.json"
+    session = dict(SAMPLE_SESSION, id="sess-foreign-summary", summary_file_path=foreign_path)
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["stats"]["summary_sidecar_files_missing"] == 0
+    assert result["stats"]["sessions_with_summary_path"] == 0
+    assert not any("summary sidecar file that no longer exists" in w for w in result["warnings"])
+
+
 def test_verify_archive_reads_valid_jsonl_mirror(tmp_path):
     db_path = str(tmp_path / "data" / "claude_search.db")
     with Storage(db_path) as db:
