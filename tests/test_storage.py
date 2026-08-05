@@ -395,14 +395,28 @@ def test_verify_archive_returns_expected_stats_keys(db):
     assert stats["total_sessions"] >= 0
 
 
-def test_verify_archive_warns_on_missing_jsonl_but_still_passes(db):
-    result = db.verify_archive()
+def test_verify_archive_warns_on_missing_jsonl_but_still_passes(tmp_path):
+    # Must be a real db_path, not ":memory:" - the JSONL mirror path is
+    # derived from db_path's directory, and ":memory:" has none, so that
+    # case is a distinct "not applicable" branch (see the test below).
+    # tmp_path keeps this isolated from any real ~/.claude-search-library
+    # mirror file that might already exist on the machine running the test.
+    db_path = str(tmp_path / "data" / "claude_search.db")
+    with Storage(db_path) as db:
+        result = db.verify_archive()
 
     # JSONL won't exist until export_summaries_to_jsonl() is called - this
     # should be a warning, not an error, and the check should still pass.
     assert any("JSONL mirror not found" in w for w in result["warnings"])
     assert result["healthy"] is True
     assert result["checks_passed"] > 0
+
+
+def test_verify_archive_skips_jsonl_check_for_in_memory_db(db):
+    result = db.verify_archive()
+
+    assert any("no on-disk mirror location" in w for w in result["warnings"])
+    assert result["healthy"] is True
 
 
 def test_verify_archive_warns_on_missing_fts5_index(db):
@@ -493,35 +507,27 @@ def test_verify_archive_skips_other_devices_raw_paths(db):
     assert not any("no readable raw file" in w for w in result["warnings"])
 
 
-def test_verify_archive_reads_valid_jsonl_mirror(db, tmp_path):
-    db.insert_session(SAMPLE_SESSION)
-    db.store_summary("sess-1", SAMPLE_SUMMARY)
-    jsonl_path = tmp_path / "mirror.jsonl"
-    db.export_summaries_to_jsonl(str(jsonl_path))
+def test_verify_archive_reads_valid_jsonl_mirror(tmp_path):
+    db_path = str(tmp_path / "data" / "claude_search.db")
+    with Storage(db_path) as db:
+        db.insert_session(SAMPLE_SESSION)
+        db.store_summary("sess-1", SAMPLE_SUMMARY)
+        db.export_summaries_to_jsonl()  # writes to the db_path-derived default location
 
-    import src.storage as storage_module
-    original = storage_module.os.path.expanduser
-    storage_module.os.path.expanduser = lambda p: str(jsonl_path) if "ai-summaries.jsonl" in p else original(p)
-    try:
         result = db.verify_archive()
-    finally:
-        storage_module.os.path.expanduser = original
 
     assert result["stats"]["jsonl_lines"] == 1
     assert not any("JSONL mirror not found" in w for w in result["warnings"])
 
 
-def test_verify_archive_flags_invalid_jsonl_line(db, tmp_path):
-    jsonl_path = tmp_path / "mirror.jsonl"
-    jsonl_path.write_text('{"session_id": "s1"}\nnot valid json\n', encoding="utf-8")
+def test_verify_archive_flags_invalid_jsonl_line(tmp_path):
+    db_path = str(tmp_path / "data" / "claude_search.db")
+    with Storage(db_path) as db:
+        jsonl_path = Path(db._default_jsonl_path())
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_path.write_text('{"session_id": "s1"}\nnot valid json\n', encoding="utf-8")
 
-    import src.storage as storage_module
-    original = storage_module.os.path.expanduser
-    storage_module.os.path.expanduser = lambda p: str(jsonl_path) if "ai-summaries.jsonl" in p else original(p)
-    try:
         result = db.verify_archive()
-    finally:
-        storage_module.os.path.expanduser = original
 
     assert result["healthy"] is False
     assert any("Invalid JSON in JSONL mirror" in e for e in result["errors"])

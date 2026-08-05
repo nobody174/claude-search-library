@@ -347,6 +347,26 @@ class Storage:
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
 
+    def _default_jsonl_path(self) -> Optional[str]:
+        """Where export_summaries_to_jsonl()/verify_archive() look for the
+        durability mirror when no explicit path is given.
+
+        Derived from db_path's parent's parent (data/claude_search.db ->
+        sibling summaries/ai-summaries.jsonl) rather than a fixed
+        ~/.claude-search-library/... constant - that hardcoding meant every
+        Storage instance shared the same real mirror file regardless of
+        db_path, so a Storage(":memory:") in tests would silently read/
+        write whatever real mirror already existed on the machine running
+        them. Reproduces today's actual real-world path exactly for the
+        default db_path; correctly isolates for any other db_path (tests,
+        a future second profile). ":memory:" has no on-disk location at
+        all, so returns None - callers treat that as "not applicable".
+        """
+        if self.db_path == ":memory:":
+            return None
+        db_dir = Path(self.db_path).resolve().parent
+        return str(db_dir.parent / "summaries" / "ai-summaries.jsonl")
+
     def __enter__(self) -> "Storage":
         self._conn = init_db(self.db_path)
         return self
@@ -651,9 +671,13 @@ class Storage:
         from this file.
         """
         if output_file is None:
-            output_file = os.path.expanduser(
-                "~/.claude-search-library/summaries/ai-summaries.jsonl"
-            )
+            output_file = self._default_jsonl_path()
+            if output_file is None:
+                raise ValueError(
+                    "output_file is required when db_path is ':memory:' - "
+                    "there's no default on-disk mirror location for an "
+                    "in-memory database."
+                )
 
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
@@ -675,9 +699,13 @@ class Storage:
         the given (or default) path.
         """
         if input_file is None:
-            input_file = os.path.expanduser(
-                "~/.claude-search-library/summaries/ai-summaries.jsonl"
-            )
+            input_file = self._default_jsonl_path()
+            if input_file is None:
+                raise ValueError(
+                    "input_file is required when db_path is ':memory:' - "
+                    "there's no default on-disk mirror location for an "
+                    "in-memory database."
+                )
 
         if not os.path.exists(input_file):
             raise FileNotFoundError(f"No JSONL backup found at {input_file}")
@@ -935,9 +963,12 @@ class Storage:
         # Check 5: JSONL mirror is readable and internally valid
         _log(5, total_checks, "JSONL mirror validation")
         try:
-            jsonl_path = os.path.expanduser("~/.claude-search-library/summaries/ai-summaries.jsonl")
+            jsonl_path = self._default_jsonl_path()
 
-            if os.path.exists(jsonl_path):
+            if jsonl_path is None:
+                stats["jsonl_lines"] = 0
+                warnings.append("JSONL mirror check skipped (no on-disk mirror location for an in-memory database)")
+            elif os.path.exists(jsonl_path):
                 valid_lines = 0
                 invalid_lines = 0
                 with open(jsonl_path, "r", encoding="utf-8") as f:
