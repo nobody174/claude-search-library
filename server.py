@@ -53,6 +53,36 @@ SESSION_COOKIE_NAME = "csl_session"
 SESSION_TTL_SECONDS = 30 * 60
 _sessions: dict[str, float] = {}
 
+# Both _sessions and _setup_attempts only ever dropped entries lazily, on
+# next access to that *same* token/IP - an expired session nobody re-checks,
+# or a lockout IP that never comes back, just sat in memory forever. Never
+# actually a problem at personal-machine scale/uptime, but a real
+# unbounded-growth bug in principle (flagged, low severity, in the
+# 2026-08-05 review's Project Reviewer round 2). Opportunistic sweep here
+# instead of a background thread - simplest fix that actually bounds
+# growth, capped to run at most once per interval so it doesn't add
+# per-request overhead.
+_PRUNE_INTERVAL_SECONDS = 10 * 60
+_last_prune_at = 0.0
+
+
+def _prune_stale_entries() -> None:
+    global _last_prune_at
+    now = time.time()
+    if now - _last_prune_at < _PRUNE_INTERVAL_SECONDS:
+        return
+    _last_prune_at = now
+    for token, expiry in list(_sessions.items()):
+        if now > expiry:
+            del _sessions[token]
+    cutoff = now - SETUP_LOCKOUT_SECONDS
+    for ip, attempts in list(_setup_attempts.items()):
+        recent = [t for t in attempts if t > cutoff]
+        if recent:
+            _setup_attempts[ip] = recent
+        else:
+            del _setup_attempts[ip]
+
 # GET / and GET /src/<path> must stay reachable pre-unlock - that's the
 # page and script that render the Unlock Device screen itself. /setup
 # must stay reachable to actually perform the unlock.
@@ -109,6 +139,7 @@ def _clear_setup_failures(ip: str) -> None:
 
 @app.before_request
 def _require_session():
+    _prune_stale_entries()
     if request.method == "OPTIONS":
         return None  # CORS preflight
     if (request.method, request.path) in _PUBLIC_ROUTES:

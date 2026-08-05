@@ -294,6 +294,22 @@ def compute_session_hash(session_dict: dict) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _path_is_local(raw_path: str, home_str: str) -> bool:
+    """Is raw_path plausibly a real path on *this* machine?
+
+    raw_file_path is a device-local absolute path that syncs across devices
+    as an ordinary column in the CRDT-merged sessions table - a session
+    pulled from another device carries that device's path, which this
+    machine never had and was never going to have. Treating that as "file
+    missing" is a false positive baked into multi-device sync itself, not a
+    real integrity problem. A cross-platform absolute-path prefix check
+    would be fragile (drive letters, home dir naming); comparing against
+    this device's actual home directory is simpler and correct for the
+    common case (raw_exports always lives under ~/.claude-search-library).
+    """
+    return raw_path.startswith(home_str)
+
+
 def init_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     """Create all tables/indices and return a fresh connection."""
     path = db_path or str(DEFAULT_DB_PATH)
@@ -855,8 +871,13 @@ class Storage:
             checked = 0
             mismatches = 0
             missing_raw_files = 0
+            foreign_device_paths = 0
+            home_str = str(Path.home())
             for row in samples:
                 raw_path = row["raw_file_path"]
+                if raw_path and not _path_is_local(raw_path, home_str):
+                    foreign_device_paths += 1
+                    continue
                 if not raw_path or not os.path.exists(raw_path):
                     missing_raw_files += 1
                     continue
@@ -877,21 +898,31 @@ class Storage:
             stats["hash_samples_valid"] = checked - mismatches
             if missing_raw_files:
                 warnings.append(f"{missing_raw_files} session(s) have no readable raw file to verify hash against")
+            if foreign_device_paths:
+                stats["foreign_device_raw_paths"] = foreign_device_paths
 
             checks_passed += 1
         except Exception as e:
             errors.append(f"Hash validation error: {e}")
             checks_failed += 1
 
-        # Check 4: Raw chat files exist for every session that references one
+        # Check 4: Raw chat files exist for every session that references one.
+        # raw_file_path is a device-local absolute path that rides along in
+        # the synced sessions table (CRDT), so a session pulled from another
+        # device always has a path this device never had and was never
+        # supposed to have - that's not a missing file, it's a different
+        # device's local file. Only count paths under *this* device's home
+        # dir as real "should exist, doesn't" findings (see _path_is_local).
         _log(4, total_checks, "Raw chat files validation")
         try:
             rows = self.conn.execute(
                 "SELECT id, raw_file_path FROM sessions WHERE raw_file_path IS NOT NULL"
             ).fetchall()
-            missing = [r["id"] for r in rows if not os.path.exists(r["raw_file_path"])]
+            home_str = str(Path.home())
+            local_rows = [r for r in rows if _path_is_local(r["raw_file_path"], home_str)]
+            missing = [r["id"] for r in local_rows if not os.path.exists(r["raw_file_path"])]
 
-            stats["sessions_with_raw_path"] = len(rows)
+            stats["sessions_with_raw_path"] = len(local_rows)
             stats["raw_chat_files_missing"] = len(missing)
             if missing:
                 warnings.append(f"{len(missing)} session(s) reference a raw chat file that no longer exists")

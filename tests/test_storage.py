@@ -453,7 +453,11 @@ def test_verify_archive_passes_when_hash_matches_raw_file(db, tmp_path):
 
 
 def test_verify_archive_warns_when_raw_file_missing_for_hash_check(db):
-    session = dict(SAMPLE_SESSION, id="sess-no-raw", raw_file_path="/does/not/exist.json")
+    # Must be under Path.home() - verify_archive() treats a path outside
+    # the current device's home dir as another device's synced session
+    # (not a local file that's genuinely missing) and skips it entirely.
+    missing_local_path = str(Path.home() / ".claude-search-library" / "does-not-exist.json")
+    session = dict(SAMPLE_SESSION, id="sess-no-raw", raw_file_path=missing_local_path)
     db.insert_session(session)
 
     result = db.verify_archive()
@@ -463,13 +467,30 @@ def test_verify_archive_warns_when_raw_file_missing_for_hash_check(db):
 
 
 def test_verify_archive_flags_missing_raw_chat_file(db):
-    session = dict(SAMPLE_SESSION, id="sess-missing-file", raw_file_path="/does/not/exist.json")
+    missing_local_path = str(Path.home() / ".claude-search-library" / "does-not-exist.json")
+    session = dict(SAMPLE_SESSION, id="sess-missing-file", raw_file_path=missing_local_path)
     db.insert_session(session)
 
     result = db.verify_archive()
 
     assert result["stats"]["raw_chat_files_missing"] == 1
     assert any("no longer exists" in w for w in result["warnings"])
+
+
+def test_verify_archive_skips_other_devices_raw_paths(db):
+    """A path outside this device's home dir is a synced session from
+    another device, not a local file gone missing - should not be counted
+    or warned about at all."""
+    foreign_path = "/completely/different/machine/raw_exports/claude-code/abc.json"
+    session = dict(SAMPLE_SESSION, id="sess-foreign-device", raw_file_path=foreign_path)
+    db.insert_session(session)
+
+    result = db.verify_archive()
+
+    assert result["stats"]["raw_chat_files_missing"] == 0
+    assert result["stats"]["sessions_with_raw_path"] == 0
+    assert not any("no longer exists" in w for w in result["warnings"])
+    assert not any("no readable raw file" in w for w in result["warnings"])
 
 
 def test_verify_archive_reads_valid_jsonl_mirror(db, tmp_path):
