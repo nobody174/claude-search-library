@@ -37,7 +37,18 @@ SRC_DIR = Path(__file__).resolve().parent / "src"
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = Flask(__name__)
-CORS(app, origins=["localhost", "127.0.0.1"])
+# The web UI (public/index.html, src/api.js) only ever makes same-origin
+# requests - CORS doesn't apply to those at all, so this allowlist was
+# dead configuration for the app's actual usage: it doesn't match the
+# documented LAN-IP access pattern (a phone hitting https://<lan-ip>:7654
+# sends Origin: https://<lan-ip>:7654, not "localhost"/"127.0.0.1"), so
+# it never permitted the one cross-origin case someone might expect it
+# to. Flagged by a Security Auditor pass (2026-08-06): not a hole (the
+# session cookie's SameSite=Strict already blocks a malicious LAN page
+# from riding a victim's session regardless of CORS), just confusing
+# dead config for anyone reading this file cold. No origins are
+# permitted - this app has no legitimate cross-origin use case.
+CORS(app, origins=[])
 
 # --- Session gate ------------------------------------------------------
 # Every route except the ones in _PUBLIC_ROUTES used to be reachable with
@@ -126,8 +137,18 @@ def _invalidate_session(token: Optional[str]) -> None:
 # via a Devil's Advocate pass on the session-gate fix itself. Per-source-IP
 # lockout, in-memory (resets on restart, same as sessions - acceptable for
 # a personal-machine security boundary).
-SETUP_MAX_ATTEMPTS = 5
-SETUP_LOCKOUT_SECONDS = 15 * 60
+#
+# Thresholds loosened from the original 5/15min after a Security Auditor
+# pass (2026-08-06) flagged that IP-keyed lockout can't distinguish a
+# legitimate user's own typos/stale-TOTP-code retries from a real
+# attacker - 5 wrong attempts is easy to hit by accident (fat-fingered
+# passphrase, phone clock drift beyond the documented ±1 TOTP step) and
+# there's no bypass short of a 15-minute wait or restarting the process.
+# 10/5min keeps real brute-force resistance (Argon2id's per-guess cost
+# dominates either way) while giving much more headroom for honest
+# mistakes before locking the legitimate user out of their own tool.
+SETUP_MAX_ATTEMPTS = 10
+SETUP_LOCKOUT_SECONDS = 5 * 60
 _setup_attempts: dict[str, list] = {}  # ip -> [timestamp, ...] of recent failures
 
 
