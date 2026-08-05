@@ -179,4 +179,4 @@ The browser client currently persists nothing about your session across page loa
 
 - Run the specific command with more logging: check `~/.claude-search-library/logs/` — there's a separate log file per subsystem (`processing.log`, `redaction.log`, `sync.log`, `search.log`, `crypto.log`, `embeddings.log`).
 - Run `python3 cli.py verify --verbose --json` and inspect the full structured report.
-- See [SPEC.md](SPEC.md) for the full technical design if you need to understand *why* something works the way it does, not just how to fix it.
+- See [CLAUDE.md](CLAUDE.md) for the architecture/module reference if you need to understand *why* something works the way it does, not just how to fix it.

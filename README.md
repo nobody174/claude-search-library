@@ -264,12 +264,11 @@ claude-search-library/
 
 - **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** — Step-by-step setup for desktop, additional devices, and the web UI
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Fixes for common setup, sync, and search issues
-- **[SPEC.md](SPEC.md)** — Full technical specification: schema, encryption model, sync protocol
-- **[CLAUDE.md](CLAUDE.md)** — Architecture decisions, known limitations, troubleshooting notes
+- **[CLAUDE.md](CLAUDE.md)** — Architecture decisions, module reference, known limitations, troubleshooting notes
 - **[ROADMAP.md](ROADMAP.md)** — Real future features, not yet started
 - **[BACKLOG.md](BACKLOG.md)** — Small deferred decisions and known low-severity gaps
 - **[CHANGELOG.md](CHANGELOG.md)** — Everything already built and fixed, in order
-- **[tasks/](tasks/)** — The original build-task breakdown this project was implemented from
+- **[tasks/](tasks/)** — The original build-task breakdown this project was implemented from, including the original design spec (`SPEC.md`) — historical, describes the pre-CRDT/pre-TLS design, kept for reference but no longer current; see CLAUDE.md for the up-to-date architecture
 
 ## Contributing
 

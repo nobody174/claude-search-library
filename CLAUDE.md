@@ -108,27 +108,66 @@ Search locally (semantic + keyword)
 ## Core Modules
 
 ### src/collector.py
-Scans 4 data sources:
-1. Claude.ai (manual JSON exports)
+Scans 6 data sources:
+1. Claude.ai (manual JSON exports, or the official Data Export via `src/claude_export_import.py`)
 2. VS Code Claude extension (~/.vscode/extensions/...)
-3. Cowork (local cache or API)
-4. Local folder (watch for new JSON)
+3. Claude Code (local `~/.claude/projects/*.jsonl` transcripts)
+4. Claude desktop app (local Chromium IndexedDB cache — see CHANGELOG.md for the full investigation)
+5. Cowork (local JSONL, same shape as Claude Code)
+6. Local folder (watch for new JSON)
 
 **Output**: Normalized chat objects matching schema
 
 ### src/processor.py
-Calls Claude API to summarize each chat:
-- Extracts TL;DR, learnings, patterns, tags
+Calls Claude API to summarize each chat. The transcript is wrapped in
+explicit `<transcript_to_analyze>` delimiters plus a "don't participate"
+instruction before being sent (see CHANGELOG.md 2026-08-04 — without
+this, some sessions pulled the model into continuing the conversation
+instead of summarizing it). System prompt asks for exactly this JSON
+shape:
+
+```
+Analyze this chat session. Respond ONLY with valid JSON (no markdown, no preamble).
+
+User and Claude worked on: {description}
+
+Respond with exactly this structure:
+{
+    "session_tldr": "One sentence: what was accomplished",
+    "learnings": ["Key takeaway 1", "Key takeaway 2"],
+    "patterns": ["Reusable workflow 1", "Reusable workflow 2"],
+    "tags": ["tag1", "tag2"],
+    "mentioned_tools": ["Tool1", "Tool2"],
+    "mentioned_languages": ["Python", "TypeScript"],
+    "mentioned_frameworks": ["Phaser 3", "NeoForge"],
+    "estimated_effort_minutes": 45,
+    "topic_categories": ["minecraft-modding", "debugging"],
+    "confidence_score": 0.92
+}
+```
+
 - Batched processing (respects rate limits)
 - Saves summaries as sidecar JSON files
 
 **Output**: Summary JSON alongside originals
 
 ### src/redactor.py
-Masks sensitive data:
-- API keys, GitHub tokens, emails, IPs
-- Flags sessions for manual review if > 3 redactions
-- Audit trail in SQLite
+Masks sensitive data before storage/indexing, ordered highest-confidence
+pattern first so a specific match (e.g. a GitHub token) claims it before
+a looser one (e.g. email) could:
+
+| Pattern | Replacement | Confidence |
+|---------|-------------|------------|
+| GitHub token (`ghp_...`) | `[GH_TOKEN_REDACTED]` | 0.99 |
+| AWS key (`AKIA...`) | `[AWS_KEY_REDACTED]` | 0.99 |
+| Discord token | `[DISCORD_TOKEN_REDACTED]` | 0.95 |
+| Generic API key | `[API_KEY_REDACTED]` | 0.9 |
+| Patreon link | `[PATREON_LINK]` | 0.85 |
+| Email | `[EMAIL_REDACTED]` | 0.8 |
+| IP address | `[IP_REDACTED]` | 0.7 |
+
+- Flags sessions for manual review if > 3 redactions (`REVIEW_THRESHOLD` in `src/redactor.py`)
+- Audit trail in SQLite (`redaction_log` table)
 
 **Output**: Redacted summaries + redaction log
 
@@ -218,7 +257,9 @@ Web UI:
 ├── config_template.yaml   # Task 9
 ├── requirements.txt
 ├── CLAUDE.md              # This file
-├── SPEC.md                # Full specification
+├── ROADMAP.md             # Unshipped future features
+├── BACKLOG.md             # Small deferred decisions
+├── CHANGELOG.md           # Everything already built/fixed
 ├── .gitignore
 └── venv/                  # Virtual environment
 ```
@@ -426,7 +467,7 @@ A: Normal — if no new chats, sync silently exits (saves data)
 **Q: "Phone can't see Desktop data"**
 A: Force push: `python3 src/sync.py --push` on Desktop; refresh phone
 
-See `SPEC.md` → "Troubleshooting" for more issues.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more issues.
 
 ---
 

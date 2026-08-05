@@ -240,5 +240,5 @@ Consider scheduling `collect` and `process` on a cron job (or Task Scheduler on 
 ## Next Steps
 
 - Read [TROUBLESHOOTING.md](TROUBLESHOOTING.md) if anything above didn't go smoothly
-- Read [SPEC.md](SPEC.md) for the full technical design (schema, encryption model, sync protocol)
-- Read [CLAUDE.md](CLAUDE.md) for architecture decisions and known limitations
+- Read [CLAUDE.md](CLAUDE.md) for architecture decisions, module reference, and known limitations
+- Read [CHANGELOG.md](CHANGELOG.md) for the full history of what's been built and fixed

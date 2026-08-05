@@ -1,3 +1,15 @@
+> **Historical document — not current.** This is the original design spec
+> written before the project was built. Large parts are now stale: the
+> Storage Schema and Sync sections describe the pre-cr-sqlite design
+> (whole-row Last-Write-Wins), superseded by real per-column CRDT
+> changesets; the Security Model section predates the TLS/session-auth
+> work; the collector list is missing sources added later (Claude Code,
+> the Claude desktop app). For the current architecture, module
+> reference, and security model, see [CLAUDE.md](../CLAUDE.md). For what's
+> actually shipped and when, see [CHANGELOG.md](../CHANGELOG.md). Kept
+> here, alongside the `TASK_N_*.md` files it was the parent document for,
+> as a record of original intent — not a live reference.
+
 # Claude Search Library — Complete Specification
 **Version 2.0 | Distributed Offline-First Personal Knowledge Management**  
 **Master Passphrase + Google Authenticator 2FA | GitHub Encrypted Sync | CRDT Auto-Merge**

@@ -1,8 +1,9 @@
 """Data collection module for Claude Search Library.
 
 Collects chat sessions from Claude.ai exports, the VS Code Claude extension,
-Cowork, and a local watch folder, normalizing all of them into a common
-schema (see SPEC.md -> Normalization Schema).
+Claude Code, the Claude desktop app, Cowork, and a local watch folder,
+normalizing all of them into a common schema (see CLAUDE.md's Core Modules
+section).
 """
 from __future__ import annotations
 
