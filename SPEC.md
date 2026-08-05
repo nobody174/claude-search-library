@@ -42,10 +42,10 @@ Create a **fully distributed, offline-first personal knowledge library** that:
 - **Multi-Device**: Desktop, laptops, phones, tablets — all stay in sync.
 - **Audit Trail**: Git history shows what changed, when, on which device.
 
-### User (Vartdal) Context
-- Primary: Desktop (Tønsberg home) + Laptop (cabin work + travel)
+### User Context
+- Primary: Desktop (home) + Laptop (work + travel)
 - Secondary: Phone, tablet (research + reference)
-- Work pattern: High-velocity chat creation (1-5 per day), regular cabin trips (offline)
+- Work pattern: High-velocity chat creation (1-5 per day), regular offline periods
 - Storage preference: GitHub private repo, full backup of raw chats + summaries
 - Processing: Daily minimum, batched (respects Claude API rate limits)
 
@@ -1572,9 +1572,9 @@ python3 src/sync.py --daemon &             # Start sync daemon
 python3 cli.py search "test query"         # Verify it works
 ```
 
-**Add iPhone:**
+**Add mobile device:**
 ```
-Safari: https://your-laptop-ip:7654
+Browser: https://<host-device-ip>:7654
 Setup New Device (same 2FA)
 Done — search from phone
 ```

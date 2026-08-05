@@ -10,7 +10,7 @@ Collect Claude chats from all your devices. Summarize with AI. Search semantical
 
 ## What Is This?
 
-You use Claude across multiple machines (home desktop, laptop at cabin, phone, tablet). Your chats scatter across devices and disappear when a machine dies or gets wiped.
+You use Claude across multiple machines (desktop, laptop, phone, tablet). Your chats scatter across devices and disappear when a machine dies or gets wiped.
 
 **Claude Search Library solves this:**
 
@@ -34,7 +34,7 @@ You use Claude across multiple machines (home desktop, laptop at cabin, phone, t
 - LastPass or similar (for master passphrase backup)
 - `vendor/cr-sqlite/crsqlite.dll` (Windows x86_64, already committed in this repo) — real CRDT multi-device merge. Missing/wrong-platform binary degrades gracefully to a plain-SQLite Last-Write-Wins fallback (see CLAUDE.md's Known Blockers); get other-platform builds from [cr-sqlite's releases](https://github.com/vlcn-io/cr-sqlite/releases).
 
-### Installation (Desktop)
+### Installation (First Device)
 
 ```bash
 git clone https://github.com/nobody174/claude-search-library.git
@@ -74,7 +74,7 @@ python3 server.py --port 7654 &
 python3 cli.py search "your query here"
 ```
 
-### Installation (Laptop, join existing setup)
+### Installation (Additional Device, join existing setup)
 
 ```bash
 git clone https://github.com/nobody174/claude-search-library.git
@@ -97,10 +97,10 @@ python3 src/sync.py --daemon &
 python3 server.py --port 7654 &
 ```
 
-### Access from iPhone
+### Access from Mobile
 
 ```
-1. Safari: https://your-laptop-ip:7654
+1. Browser: https://<host-device-ip>:7654
 2. Enter master passphrase
 3. Enter Google Authenticator code
 4. Start searching!
@@ -191,7 +191,7 @@ Search locally (semantic + keyword hybrid)
 
 | Decision | Benefit |
 |----------|---------|
-| **Distributed sync via GitHub** | No central server; desktop can go offline at a cabin |
+| **Distributed sync via GitHub** | No central server; any device can go fully offline and catch up later |
 | **Hybrid search (ChromaDB + FTS5)** | Semantic recall for fuzzy queries, fast BM25 keyword matching as backstop |
 | **Master passphrase + TOTP** | Two independent factors; brute-force resistant |
 | **Local ChromaDB** | Semantic search works offline; no API calls at query time |
