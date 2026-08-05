@@ -44,6 +44,49 @@ CHANGESETS_DIR = "changesets"
 _CRSQL_CHANGES_COLUMNS = ["table", "pk", "cid", "val", "col_version", "db_version", "site_id", "cl", "seq"]
 _CRSQL_CHANGES_COLUMNS_SQL = ",".join(f'"{c}"' for c in _CRSQL_CHANGES_COLUMNS)
 
+# Bumped whenever the sync transport's on-disk shape changes in a way
+# that's silently misread by older code - like this session's move from
+# whole-row files to changesets. A device running code from *before* this
+# constant existed at all (e.g. a desktop that hasn't pulled the latest
+# code yet) has no way to know to check this - that half of the risk is
+# procedural, not fixable in code (update the CODE repo before ever
+# running an old checkout against a migrated data repo). What this DOES
+# protect: any *future* protocol bump, where new code correctly refuses
+# to silently proceed against a data repo from a newer protocol version
+# it doesn't understand, instead of reporting a false "0 changes, all
+# good". Found via a Release Manager pass, prompted by discovering 114
+# stale pre-migration files still sitting in the data repo that an
+# not-yet-updated desktop would otherwise read as if current.
+SYNC_PROTOCOL_VERSION = 2
+SYNC_PROTOCOL_VERSION_FILENAME = "sync_protocol_version"
+
+
+def _check_protocol_version(repo_path: Path) -> None:
+    version_path = repo_path / SYNC_PROTOCOL_VERSION_FILENAME
+    if not version_path.exists():
+        return
+    remote_version = int(version_path.read_text(encoding="utf-8").strip() or "1")
+    if remote_version > SYNC_PROTOCOL_VERSION:
+        raise RuntimeError(
+            f"This data repo is on sync protocol version {remote_version}, but this "
+            f"device's code only understands up to version {SYNC_PROTOCOL_VERSION}. "
+            f"Update claude-search-library's code on this device before syncing, or "
+            f"you will silently miss real changes rather than see an error like this one."
+        )
+
+
+def _stamp_protocol_version_if_needed(repo_path: Path) -> Optional[str]:
+    """Write the current protocol version file if it's missing or stale.
+    Returns the relative filename if it needs to be added to this push's
+    commit, or None if it's already up to date (avoid a spurious commit
+    on every no-op sync just to rewrite an unchanged value)."""
+    version_path = repo_path / SYNC_PROTOCOL_VERSION_FILENAME
+    current = version_path.read_text(encoding="utf-8").strip() if version_path.exists() else None
+    if current == str(SYNC_PROTOCOL_VERSION):
+        return None
+    version_path.write_text(str(SYNC_PROTOCOL_VERSION), encoding="utf-8")
+    return SYNC_PROTOCOL_VERSION_FILENAME
+
 
 def _encode_changeset_row(row: dict) -> dict:
     """crsql_changes' pk/site_id columns are raw bytes; val's type follows
@@ -241,6 +284,7 @@ class SyncWorker:
         """
         _setup_file_logging()
         repo = _open_repo(self.repo_path)
+        _check_protocol_version(self.repo_path)
         device_id = _device_id()
 
         changesets_dir = self.repo_path / CHANGESETS_DIR / device_id
@@ -300,7 +344,9 @@ class SyncWorker:
         )
 
         if files_changed:
-            repo.index.add(files_changed + [SYNC_METADATA_FILENAME])
+            version_file = _stamp_protocol_version_if_needed(self.repo_path)
+            commit_files = files_changed + [SYNC_METADATA_FILENAME] + ([version_file] if version_file else [])
+            repo.index.add(commit_files)
             repo.index.commit(f"Sync from {device_id}: {len(files_changed)} file(s)")
             repo.remote(name="origin").push()
 
@@ -339,6 +385,8 @@ class SyncWorker:
         except GitCommandError as e:
             logger.error("pull failed: %s", e)
             raise
+
+        _check_protocol_version(self.repo_path)
 
         changesets_root = self.repo_path / CHANGESETS_DIR
         device_id = _device_id()

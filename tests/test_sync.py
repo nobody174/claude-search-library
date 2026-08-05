@@ -395,6 +395,34 @@ def test_pull_from_github_skips_undecryptable_files(repo_path, mock_repo, tmp_pa
     assert result["files_changed"] == 0
 
 
+def test_pull_refuses_a_newer_sync_protocol_version(repo_path, mock_repo, tmp_path, encryption_key):
+    """Regression test for a real Release Manager finding: a device running
+    older code has no way to know the data repo's on-disk shape changed
+    (e.g. this session's whole-row-files -> changesets migration) - it
+    would silently see "0 changes" and report success while actually
+    missing everything. This protects the *next* protocol bump: refuse
+    to proceed, loudly, rather than silently under-syncing."""
+    (repo_path / sync.SYNC_PROTOCOL_VERSION_FILENAME).write_text(
+        str(sync.SYNC_PROTOCOL_VERSION + 1), encoding="utf-8"
+    )
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=str(tmp_path / "test.db"))
+    with pytest.raises(RuntimeError, match="protocol version"):
+        worker.pull_from_github()
+
+
+def test_push_stamps_protocol_version_on_first_real_push(repo_path, mock_repo, tmp_path, encryption_key):
+    db_path = str(tmp_path / "test.db")
+    with Storage(db_path) as db:
+        db.insert_session(_sample_session())
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    worker.push_to_github()
+
+    version_file = repo_path / sync.SYNC_PROTOCOL_VERSION_FILENAME
+    assert version_file.exists()
+    assert version_file.read_text(encoding="utf-8").strip() == str(sync.SYNC_PROTOCOL_VERSION)
+
+
 def test_sync_bidirectional_calls_pull_and_push(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
     db_path = str(tmp_path / "test.db")
     worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
