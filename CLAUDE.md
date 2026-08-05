@@ -87,7 +87,7 @@ Search locally (semantic + keyword)
 ### 3. Sync: Distributed via GitHub, No Central Hub
 
 **Decision**: Each device is autonomous; GitHub is the transport layer
-**Why**: Laptop can work offline at cabin; desktop shutdown doesn't break syncing
+**Why**: Laptop can work fully offline anywhere; desktop shutdown doesn't break syncing
 **Trade-off**: No real-time sync (5-min interval acceptable)
 
 ### 4. Conflict Resolution: cr-sqlite CRDT
@@ -278,10 +278,10 @@ python3 src/sync.py --pull
 # 6-10. Same as Desktop
 ```
 
-### iPhone (Web UI)
+### Mobile (Web UI)
 
 ```
-1. Safari: https://your-laptop-ip:7654
+1. Browser: https://<host-device-ip>:7654
 2. Setup Device:
    - Enter master passphrase
    - Scan TOTP QR into Google Authenticator

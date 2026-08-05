@@ -80,7 +80,7 @@ Files to create:
 ## Setup Flow (Mobile)
 
 ```
-1. Safari: https://your-laptop-ip:7654
+1. Browser: https://<host-device-ip>:7654
 
 2. Setup Page
    Input: Master passphrase

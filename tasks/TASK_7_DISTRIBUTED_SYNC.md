@@ -61,13 +61,13 @@ github.com/nobody174/claude-search-library/
 ```json
 {
     "devices": {
-        "desktop_home": {
+        "desktop_1": {
             "device_name": "Desktop",
             "last_sync_at": "2026-07-31T14:22:00Z",
             "last_heartbeat": "2026-07-31T14:25:00Z",
             "pending_changes": 0
         },
-        "laptop_cabin": {
+        "laptop_1": {
             "device_name": "Laptop",
             "last_sync_at": "2026-07-31T14:20:00Z",
             "last_heartbeat": "2026-07-31T14:24:00Z",
