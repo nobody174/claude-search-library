@@ -23,7 +23,7 @@
 | GitHub API rate limits | Sync frequency | Low | 5-min interval ≈ 288 calls/day (well under limit) |
 | Mobile TOTP sync | iPhone setup | TBD | Consider alternative (SMS code?) if TOTP distribution complex |
 | ChromaDB persistence | Search rebuilding | Low | Handled by PersistentClient |
-| No TLS on server.py | Session cookie crosses the LAN in cleartext | Medium, known | Server binds `0.0.0.0` by design (phone/LAN access). Session gate (2026-08-05) closed unauthenticated access, but not this - needs real cert-management design work, not a quick fix. Fine on a trusted home network. |
+| ~~No TLS on server.py~~ | Session cookie crossed the LAN in cleartext | **RESOLVED 2026-08-05** | `server.py` now serves HTTPS by default via a self-signed cert (`~/.claude-search-library/certs/`, 10-year validity, SAN covers `localhost`/`127.0.0.1`/the desktop's LAN IP). `--no-tls` falls back to plain HTTP for pure-localhost dev. `secure=request.is_secure` on the session cookie (already in place) now actually sets `Secure` in the normal case. First connection from a new device (including the iPhone) shows an untrusted-cert warning - expected for self-signed, trust it once. |
 
 ---
 

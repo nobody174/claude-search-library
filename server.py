@@ -613,9 +613,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Claude Search Library REST API")
     parser.add_argument("--port", type=int, default=7654)
     parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--no-tls", action="store_true",
+        help="Serve plain HTTP instead of HTTPS. The session cookie set on "
+             "/setup and /unlock then crosses the LAN in cleartext - only "
+             "use this for pure-localhost dev work, not for real "
+             "phone/LAN access (see CLAUDE.md's iPhone setup instructions).",
+    )
     args = parser.parse_args()
 
-    app.run(host=args.host, port=args.port)
+    ssl_context = None
+    if not args.no_tls:
+        cert_dir = Path.home() / ".claude-search-library" / "certs"
+        cert_path, key_path = cert_dir / "server.crt", cert_dir / "server.key"
+        if cert_path.exists() and key_path.exists():
+            ssl_context = (str(cert_path), str(key_path))
+        else:
+            print(
+                f"No TLS cert found at {cert_dir} - falling back to plain "
+                f"HTTP. Generate one with openssl or pass --no-tls to "
+                f"silence this warning."
+            )
+
+    scheme = "https" if ssl_context else "http"
+    print(f"Starting Claude Search Library on {scheme}://{args.host}:{args.port} ...")
+    app.run(host=args.host, port=args.port, ssl_context=ssl_context)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,12 @@ if not exist "venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo Starting Claude Search Library on http://localhost:7654 ...
-start "" http://localhost:7654
+REM Server now defaults to HTTPS (self-signed cert) so the session cookie
+REM doesn't cross the LAN in cleartext when a phone connects over WiFi.
+REM The browser will show an untrusted-cert warning once per device -
+REM that's expected for a self-signed cert, click through/trust it.
+echo Starting Claude Search Library on https://localhost:7654 ...
+start "" https://localhost:7654
 venv\Scripts\python.exe server.py --port 7654
 
 pause
