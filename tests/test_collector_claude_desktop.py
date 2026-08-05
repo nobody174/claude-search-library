@@ -10,7 +10,7 @@ src/collector.py). Byte-for-byte reproducing that on disk isn't something a
 hand-written fixture can reasonably do - the real verification for that path
 was done manually against the actual local Claude desktop app store (copied,
 never modified) and real Chrome-generated reference IndexedDB stores during
-development; see ROADMAP.md #9 for that investigation's history.
+development; see CHANGELOG.md for that investigation's history.
 
 What's tested here instead:
 - The conversion/normalization logic (_convert_claude_desktop_tree,

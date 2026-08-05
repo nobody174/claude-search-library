@@ -1,7 +1,7 @@
 """Markdown export module for Claude Search Library.
 
 Renders a session (raw messages, when available on disk) plus its stored
-summary as a single shareable .md file. See ROADMAP.md #3.
+summary as a single shareable .md file. See CHANGELOG.md.
 """
 from __future__ import annotations
 

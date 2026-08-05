@@ -10,7 +10,7 @@ per-source collectors in src.collector:
   matches collect_all()'s original always-continue behavior.
 
 CLI: python3 cli.py collect --source claude-ai --fail-fast
-See ROADMAP.md #1.
+See CHANGELOG.md.
 """
 from __future__ import annotations
 

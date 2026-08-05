@@ -1,4 +1,4 @@
-"""Official claude.ai Data Export import (roadmap #4).
+"""Official claude.ai Data Export import (Web Chat Import, see CHANGELOG.md).
 
 Converts the ZIP/JSON a user downloads from claude.ai's own
 Settings -> Export Data feature (Anthropic's `conversations.json` shape:
@@ -6,10 +6,10 @@ uuid/name/chat_messages[]/sender/text) into the per-session raw-export
 JSON files collect_from_claude_ai() already watches.
 
 Deliberately does NOT talk to claude.ai's API in any way — this is the
-only sanctioned export path. ROADMAP.md #8 found that any automated
-access to claude.ai (unofficial scrapers, cookie-based clients) violates
-Anthropic's Consumer Terms; this module only ever reads a file the user
-downloaded through the official UI.
+only sanctioned export path. ROADMAP.md's iOS chat capture entry found
+that any automated access to claude.ai (unofficial scrapers, cookie-based
+clients) violates Anthropic's Consumer Terms; this module only ever
+reads a file the user downloaded through the official UI.
 """
 from __future__ import annotations
 

@@ -521,15 +521,17 @@ def collect_from_claude_desktop(indexeddb_root: Optional[str] = None) -> list[di
     conversation's full title + message history exactly as fetched from
     claude.ai's own API, just cached to disk for fast reloads/offline use.
     This reads that cache directly; it never talks to claude.ai's API
-    itself (see ROADMAP.md #9 for why that distinction matters and why
-    the API-scraping approach ruled out in #8 does not apply here).
+    itself (see CHANGELOG.md's "Claude desktop app chat capture"
+    investigation for why that distinction matters and why the
+    API-scraping approach ruled out for iOS capture, see ROADMAP.md,
+    does not apply here).
 
     Important limitation: this only recovers conversations the user has
     actually *opened* in the desktop app while the query cache held them
     (and that haven't since been evicted) - not full account history the
     way the official Settings -> Export Data feature would give you. It's
     a real, useful, incremental source, not a replacement for occasional
-    full-export catch-up (see ROADMAP.md #4).
+    full-export catch-up (Web Chat Import, see CHANGELOG.md).
 
     The app holds a LevelDB single-writer lock while running, so this
     always copies the whole IndexedDB directory (+ its sibling .blob

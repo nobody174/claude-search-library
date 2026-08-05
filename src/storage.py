@@ -634,7 +634,7 @@ class Storage:
         resetting status to "new" so it gets (re)summarized - rather than
         attempting a second INSERT with the same id, which previously
         failed outright with a raw sqlite3.IntegrityError and left the
-        stale hash in place forever (see ROADMAP.md #9).
+        stale hash in place forever (see CHANGELOG.md).
         """
         content_hash = compute_session_hash(hash_source if hash_source is not None else session_dict)
 

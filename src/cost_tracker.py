@@ -2,7 +2,7 @@
 
 Tracks API spend per session and produces monthly/quarterly reports.
 Every summarization call in src/processor.py records its token usage
-here via record_usage(). See ROADMAP.md #2.
+here via record_usage(). See CHANGELOG.md.
 """
 from __future__ import annotations
 

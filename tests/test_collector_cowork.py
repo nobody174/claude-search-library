@@ -5,7 +5,7 @@ format), Cowork sessions are discovered to be plain JSONL - the exact same
 format collect_from_claude_code() already reads - just nested under the
 desktop app's local-agent-mode-sessions/ tree. So this CAN and does build
 a real synthetic fixture end-to-end, including a regression test for the
-real long-path bug found against actual data (see ROADMAP.md #9): Cowork's
+real long-path bug found against actual data (see CHANGELOG.md): Cowork's
 real nested directory structure exceeds Windows' 260-char MAX_PATH, which
 silently breaks plain pathlib glob/iterdir with no path-length-related
 error message.

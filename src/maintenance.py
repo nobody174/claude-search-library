@@ -4,7 +4,7 @@ Prunes old raw chat content while keeping sessions searchable: the
 sessions row, its stored summary, and its search/embedding index all
 stay intact — only the on-disk raw export file (the full conversation
 text) is deleted, since that's the bulk of storage and the least useful
-part of an old session (see ROADMAP.md #5).
+part of an old session (see CHANGELOG.md).
 """
 from __future__ import annotations
 

@@ -266,6 +266,9 @@ claude-search-library/
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Fixes for common setup, sync, and search issues
 - **[SPEC.md](SPEC.md)** — Full technical specification: schema, encryption model, sync protocol
 - **[CLAUDE.md](CLAUDE.md)** — Architecture decisions, known limitations, troubleshooting notes
+- **[ROADMAP.md](ROADMAP.md)** — Real future features, not yet started
+- **[BACKLOG.md](BACKLOG.md)** — Small deferred decisions and known low-severity gaps
+- **[CHANGELOG.md](CHANGELOG.md)** — Everything already built and fixed, in order
 - **[tasks/](tasks/)** — The original build-task breakdown this project was implemented from
 
 ## Contributing
