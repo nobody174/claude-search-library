@@ -446,7 +446,13 @@
               {isUnparsed && <span className="text-danger mr-1" title="This session failed to process and is not a real content match">⚠</span>}
               {result.title || "(untitled session)"}
             </h3>
-            <span className="text-xs shrink-0 bg-surface2 text-accent font-mono rounded px-2 py-1">
+            {/* De-emphasized relative to title/tldr - relevance % is a
+                secondary decision aid, not the primary scan target, but
+                was previously styled in the same accent color as primary
+                actions/emphasis, competing with the title for attention
+                on a screen whose whole job is "scan fast". Found via a
+                Design Critic pass. */}
+            <span className="text-xs shrink-0 text-muted/70 font-mono rounded px-1.5 py-0.5">
               {(result.relevance_score * 100).toFixed(0)}%
             </span>
           </div>
@@ -457,7 +463,7 @@
             {result.search_type && <span className="italic">via {result.search_type}</span>}
           </div>
           {result.top_pattern && (
-            <p className="text-xs text-muted mt-2 italic">"{result.top_pattern}"</p>
+            <p className="text-xs text-muted/70 mt-2 italic">"{result.top_pattern}"</p>
           )}
           <button
             className="mt-3 text-sm font-medium text-accent hover:underline"
