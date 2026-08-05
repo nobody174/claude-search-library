@@ -174,8 +174,18 @@ a looser one (e.g. email) could:
 ### src/storage.py
 SQLite operations:
 - CRUD for sessions, summaries, search_index, redaction_log, sync_metadata
-- cr-sqlite integration (CRDT support)
-- Schema initialization
+- cr-sqlite integration (CRDT support) — `sessions`/`summaries` are real
+  CRR tables; `crsql_changes` is the actual sync payload (see src/sync.py)
+- Schema initialization + migrations (`init_db()`, SCHEMA_VERSION)
+- `verify_archive()`: 7 integrity checks (DB integrity, session/summary/
+  index count consistency, per-session content-hash validation, raw
+  chat + summary sidecar file presence, JSONL mirror validity, sync
+  metadata sanity, FTS5 index status) — this is what `cli.py verify`
+  and the web UI's health check both call
+- JSONL durability mirror (`export_summaries_to_jsonl()`/
+  `restore_summaries_from_jsonl()`): a flat backup of the summaries
+  table, not the source of truth — lets you rebuild summaries if
+  SQLite itself gets corrupted
 
 **Output**: Persistent local database
 
@@ -199,16 +209,24 @@ Encryption + 2FA:
 ### src/sync.py
 GitHub-based distributed sync:
 - 5-minute daemon loop
-- Push encrypted blobs to GitHub
-- Pull & merge via cr-sqlite CRDT
-- Rebuild ChromaDB on sync
+- Push: real `crsql_changes` changesets (one encrypted file per push,
+  per device, named by the `db_version` it covers) + raw chat files —
+  not whole-row session/summary files (that was the pre-2026-08-05
+  design; see CHANGELOG.md)
+- Pull: applies changesets via `INSERT INTO crsql_changes` — real
+  per-column CRDT merge, not a hand-written Last-Write-Wins comparison
+- Rebuild ChromaDB + FTS5 index after every pull that brought in changes
 
 **Output**: Synchronized database across devices
 
 ### src/search.py + cli.py + server.py
 Search interface:
-- Semantic search (ChromaDB)
-- Keyword search (SQLite LIKE)
+- Semantic search (ChromaDB, cosine similarity)
+- Keyword search: FTS5 with BM25 ranking is the primary path
+  (`search_fts5()`), falling back to a slower `LIKE`-based scan only if
+  the FTS5 index hasn't been built yet for that session
+- `hybrid` mode (default): semantic first, falls back to keyword when
+  semantic is slow or sparse
 - CLI commands (Click)
 - REST API (Flask)
 
@@ -233,103 +251,24 @@ Web UI:
 
 ---
 
-## File Structure (After Build)
+## File Structure
 
-```
-~/projects/claude-search-library/
-├── src/
-│   ├── __init__.py
-│   ├── collector.py       # Task 1
-│   ├── processor.py       # Task 2
-│   ├── redactor.py        # Task 3
-│   ├── storage.py         # Task 4
-│   ├── embedder.py        # Task 5
-│   ├── crypto.py          # Task 6
-│   ├── sync.py            # Task 7
-│   ├── search.py          # Task 8
-│   ├── config.py          # Task 9
-│   └── utils.py
-├── public/
-│   └── index.html         # Task 10
-├── cli.py                 # Task 8
-├── server.py              # Task 8
-├── api.js                 # Task 10
-├── config_template.yaml   # Task 9
-├── requirements.txt
-├── CLAUDE.md              # This file
-├── ROADMAP.md             # Unshipped future features
-├── BACKLOG.md             # Small deferred decisions
-├── CHANGELOG.md           # Everything already built/fixed
-├── .gitignore
-└── venv/                  # Virtual environment
-```
+See README.md's [Project Structure](README.md#project-structure) section
+for the current, real file tree — this section used to duplicate it with
+a pre-build/aspirational version (referencing "Task N" labels from the
+original 10-task build plan) that drifted out of sync as real modules
+(`cost_tracker.py`, `maintenance.py`, `orchestration.py`, `export.py`,
+`claude_export_import.py`, `auth_ui.py`, and more) were added.
 
 ---
 
 ## Setup Instructions
 
-### Desktop (First Time)
-
-```bash
-# 1. Clone repo
-git clone https://github.com/nobody174/claude-search-library.git
-cd claude-search-library
-
-# 2. Virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Initialize (creates DB, directories)
-python3 -m src.storage --init
-
-# 5. Setup 2FA encryption
-python3 -m src.crypto --setup
-# Follow prompts: scan QR → enter passphrase → verify TOTP
-
-# 6. Collect existing chats
-python3 cli.py collect
-
-# 7. Process summaries
-python3 cli.py process --batch-size 10
-
-# 8. Start sync daemon (background)
-python3 src/sync.py --daemon --interval 300 &
-
-# 9. Start search API
-python3 server.py --port 7654 &
-
-# 10. Test search
-python3 cli.py search "test query"
-```
-
-### Laptop (Join Existing Setup)
-
-```bash
-# 1-3. Same as above
-
-# 4. Join device (sync encryption key)
-python3 -m src.crypto --join-device
-# Follow prompts: enter passphrase → scan TOTP QR → verify code
-
-# 5. Initial sync (pull all Desktop data)
-python3 src/sync.py --pull
-
-# 6-10. Same as Desktop
-```
-
-### Mobile (Web UI)
-
-```
-1. Browser: https://<host-device-ip>:7654
-2. Setup Device:
-   - Enter master passphrase
-   - Scan TOTP QR into Google Authenticator
-   - Verify code
-3. Start searching!
-```
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for the current,
+step-by-step setup walkthrough (first device, additional devices, web
+UI/mobile access) — this used to be a shorter duplicate that drifted
+out of sync (missing the `cli.py verify` step DEPLOYMENT_GUIDE.md adds
+before syncing).
 
 ---
 
@@ -359,32 +298,11 @@ python3 src/sync.py --pull
 
 ## Common Commands
 
-```bash
-# Collect new chats
-python3 cli.py collect
-
-# Process summaries (with progress)
-python3 cli.py process --batch-size 10
-
-# Search
-python3 cli.py search "minecraft"
-
-# Start daemon (5-min sync)
-python3 src/sync.py --daemon &
-
-# Start API server
-python3 server.py --port 7654 &
-
-# View stats
-curl http://localhost:7654/stats | jq
-
-# Manual sync
-python3 src/sync.py --pull
-python3 src/sync.py --push
-
-# Run tests
-python3 -m pytest tests/ -v
-```
+See README.md's [Common Commands](README.md#common-commands) section for
+the current, complete command reference — this used to be a shorter
+duplicate that drifted stale (referenced `python3 src/sync.py --pull`
+directly instead of the `cli.py sync` wrapper, and was missing `verify`
+and the REST endpoints added since).
 
 ---
 
@@ -455,19 +373,10 @@ python3 -m pytest tests/ -v --cov=src
 
 ## Troubleshooting
 
-**Q: "Encryption key mismatch" between devices**
-A: Check master passphrase in LastPass; retry `python3 -m src.crypto --join-device`
-
-**Q: "TOTP code keeps failing"**
-A: Sync system time: `sudo sntp -s time.apple.com`; try ±1 time step
-
-**Q: "Sync shows no changes"**
-A: Normal — if no new chats, sync silently exits (saves data)
-
-**Q: "Phone can't see Desktop data"**
-A: Force push: `python3 src/sync.py --push` on Desktop; refresh phone
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more issues.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for the current, complete
+troubleshooting guide — this used to be a shorter duplicate (4 Q&As,
+a strict subset) that drifted stale (referenced `python3 src/sync.py
+--push` directly instead of the `cli.py sync` wrapper).
 
 ---
 

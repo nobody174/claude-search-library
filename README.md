@@ -5,7 +5,7 @@
 Collect Claude chats from all your devices. Summarize with AI. Search semantically. Sync encrypted to GitHub. Works offline.
 
 ![Status Badge](https://img.shields.io/badge/status-production-green)
-![Tests](https://img.shields.io/badge/tests-323%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-329%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ## What Is This?
