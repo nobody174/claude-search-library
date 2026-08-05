@@ -176,7 +176,12 @@ SQLite operations:
 - CRUD for sessions, summaries, search_index, redaction_log, sync_metadata
 - cr-sqlite integration (CRDT support) — `sessions`/`summaries` are real
   CRR tables; `crsql_changes` is the actual sync payload (see src/sync.py)
-- Schema initialization + migrations (`init_db()`, SCHEMA_VERSION)
+- Schema initialization + migrations (`init_db()`, `SCHEMA_VERSION`) —
+  raises `SchemaTooNewError` if a database's own recorded schema
+  version is ahead of what this code understands, instead of silently
+  running old-shape queries against it (distinct from `sync_protocol_
+  version` in src/sync.py, which guards the sync wire format, not the
+  local schema — see CHANGELOG.md's 2026-08-06 entry)
 - `verify_archive()`: 7 integrity checks (DB integrity, session/summary/
   index count consistency, per-session content-hash validation, raw
   chat + summary sidecar file presence, JSONL mirror validity, sync

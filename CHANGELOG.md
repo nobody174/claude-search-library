@@ -7,6 +7,54 @@ open see [ROADMAP.md](ROADMAP.md) (future features) and
 
 ---
 
+## 2026-08-06 — Security Auditor, Code Style Enforcer, and Release Manager passes
+
+Three roles run back-to-back per the project's own AI-role workflow,
+each finding real, independently-verifiable things - not review-theater.
+
+- **Security Auditor**: reviewed the TLS change from 2026-08-05 (desktop)
+  and its interaction with the existing session/auth machinery. TLS
+  itself and the session lifecycle both came back clean - no mixed
+  content, no fixation, no bypass shortcuts. Two real findings, both
+  fixed: `/setup`'s brute-force lockout (5 attempts/15 min) could trap
+  the *legitimate* user, not just an attacker, since it's keyed by IP
+  with no way to distinguish a fat-fingered passphrase or a stale TOTP
+  code from a real attack - loosened to 10 attempts/5 min. The CORS
+  allowlist (`localhost`/`127.0.0.1`) was dead configuration that didn't
+  match the app's own documented LAN-IP access pattern and wasn't doing
+  any real protective work (`SameSite=Strict` on the session cookie
+  already blocks the attack CORS would otherwise guard against) -
+  changed to `origins=[]`, matching the app's actual security model.
+- **Code Style Enforcer**: checked naming, docstrings, logging setup,
+  and type hint consistency across the whole codebase against its own
+  dominant convention (no formal linter config exists). Found the code
+  itself in good shape overall - two real findings: `src/redactor.py`
+  had its own duplicate `DB_PATH` constant instead of importing
+  `storage.py`'s canonical `DEFAULT_DB_PATH`; and the header/footer
+  banner convention added to `cli.py`/`server.py`/`public/index.html`
+  hadn't propagated to any of the 13 `src/*.py` modules - now applied
+  to all of them for consistency.
+- **Release Manager / Versioning Advisor**: evaluated whether this
+  project needs app-level version numbers/git tags, given it's not
+  packaged/published (deployment is `git pull`, not a release step).
+  Conclusion: no - git SHAs + CHANGELOG.md's existing date-based entries
+  already serve that purpose, and forcing version numbers onto entries
+  like this one (multiple dated sub-entries on the same real day) would
+  be artificial ceremony with no real reader. Found one genuine gap,
+  distinct from `sync_protocol_version` (which guards the sync *wire
+  format* between devices): nothing guarded against old code opening an
+  already-migrated (newer-schema) local database - a local failure mode,
+  not a sync failure, so `sync_protocol_version`'s check never triggers
+  for it. Fixed: `_run_schema_upgrades()` now raises `SchemaTooNewError`
+  if a database's stored `schema_meta.version` is ahead of the running
+  code's `SCHEMA_VERSION`, instead of silently running old-shape queries
+  against a schema it doesn't understand.
+
+Tests: 330 passed (added 1 new test for the schema-version-mismatch
+guard), no regressions.
+
+---
+
 ## 2026-08-05, continued — full project review + fix cascade
 
 **Trigger: after the cr-sqlite work, ran a genuine "Project Reviewer, full

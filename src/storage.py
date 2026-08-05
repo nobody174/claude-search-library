@@ -251,6 +251,24 @@ def _migrate_v1_to_v2_crdt_schema(conn: sqlite3.Connection) -> None:
     logger.info("Schema migration complete: %d session(s) preserved", migrated)
 
 
+class SchemaTooNewError(RuntimeError):
+    """Raised when a database's schema_meta.version is newer than this
+    code's SCHEMA_VERSION - this code is too old to safely open it.
+
+    Distinct from sync_protocol_version (src/sync.py), which guards the
+    *sync wire format* between devices. This guards the *local* SQLite
+    schema: e.g. desktop pulls new code and migrates library.db to a
+    future schema v3, then the same person opens the laptop (still on
+    v2 code, not yet git-pulled) against its own local library.db that
+    somehow also ended up on v3 (e.g. a restored backup, or a copy from
+    desktop). Without this check, old code would silently run v2-shaped
+    queries against a v3 database and fail confusingly deep in some
+    unrelated function, or worse, half-succeed and corrupt data - not a
+    sync failure, so sync_protocol_version's guard never triggers.
+    Suggested by a Release Manager pass (2026-08-06).
+    """
+
+
 def _run_schema_upgrades(conn: sqlite3.Connection) -> None:
     """Create/upgrade the schema. Must run before crsql_as_crr() and before
     any other caller touches sessions/summaries - see
@@ -262,6 +280,14 @@ def _run_schema_upgrades(conn: sqlite3.Connection) -> None:
     if _table_exists(conn, "schema_meta"):
         row = conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()
         current_version = int(row[0]) if row else 0
+
+    if current_version > SCHEMA_VERSION:
+        raise SchemaTooNewError(
+            f"This database is schema v{current_version}, but this code only "
+            f"understands up to v{SCHEMA_VERSION}. Pull the latest code "
+            f"(git pull) before opening this database - see CHANGELOG.md "
+            f"for what changed."
+        )
 
     if sessions_existed_before and current_version < 2:
         _migrate_v1_to_v2_crdt_schema(conn)

@@ -579,3 +579,30 @@ def test_verify_archive_detects_database_corruption(tmp_path):
     with pytest.raises(Exception):
         with Storage(str(db_path)) as db:
             db.verify_archive()
+
+
+def test_opening_a_newer_schema_database_raises(tmp_path):
+    """If this code's SCHEMA_VERSION is behind the database's own recorded
+    version, opening it must fail loudly (SchemaTooNewError) instead of
+    silently running old-shape queries against a newer schema - see
+    _run_schema_upgrades's docstring for the real scenario this guards
+    against (a second device, not yet git-pulled, opening a database
+    another device already migrated further)."""
+    from src.storage import SchemaTooNewError, SCHEMA_VERSION
+
+    db_path = str(tmp_path / "future.db")
+    with Storage(db_path):
+        pass  # creates the DB at the current real SCHEMA_VERSION
+
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE schema_meta SET value = ? WHERE key = 'version'",
+        (str(SCHEMA_VERSION + 1),),
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SchemaTooNewError):
+        with Storage(db_path):
+            pass
