@@ -23,6 +23,7 @@
 | GitHub API rate limits | Sync frequency | Low | 5-min interval ≈ 288 calls/day (well under limit) |
 | Mobile TOTP sync | iPhone setup | TBD | Consider alternative (SMS code?) if TOTP distribution complex |
 | ChromaDB persistence | Search rebuilding | Low | Handled by PersistentClient |
+| No TLS on server.py | Session cookie crosses the LAN in cleartext | Medium, known | Server binds `0.0.0.0` by design (phone/LAN access). Session gate (2026-08-05) closed unauthenticated access, but not this - needs real cert-management design work, not a quick fix. Fine on a trusted home network. |
 
 ---
 
@@ -721,6 +722,100 @@ around, given real usage was about to start.
   locally, verify, first real push, verify on GitHub) agreed with the
   user; pilot planned on the laptop first (lower-stakes, easily
   re-collectible data) before repeating on desktop.
+- **Update, same day**: the laptop migration ran for real - backed up
+  `claude_search.db`, converted locally (61 sessions preserved exactly,
+  1,708 real changeset rows retroactively captured), verified healthy,
+  pushed for real (`changesets/nobody174-laptop/5.enc` confirmed live on
+  `origin/main`). Found and fixed one more real bug during the live
+  migration itself: SQLite's `ALTER TABLE RENAME` auto-rewrites
+  `REFERENCES` clauses in *other* tables pointing at the renamed table,
+  which silently broke `search_index`/`redaction_log`/`api_costs` until
+  repaired losslessly. Desktop migration still pending - user hasn't
+  reached the desktop machine yet.
+
+---
+
+## Session log (2026-08-05, continued — full project review + fix cascade)
+
+**Trigger: after the cr-sqlite work, ran a genuine "Project Reviewer, full
+analysis" pass against the whole codebase, then worked the findings
+through a deliberate sequence of roles** (Implementer/Fixer → Security
+Auditor → QA/Playtester → Devil's Advocate → Design Critic), each
+finding real, independently-verifiable issues rather than re-covering
+the same ground. Full detail lives in the conversation; this is the
+durable summary.
+
+- **Found and fixed: `src/redactor.py` was never actually called.**
+  Built to spec, unit-tested in isolation, and never wired into
+  `processor.py` - every summary this project had ever produced went out
+  unredacted, directly contradicting CLAUDE.md's own Security section.
+  Now wired in before storage/indexing/embedding; sessions crossing the
+  redaction threshold get marked `needs_review` and skip
+  search_index/ChromaDB, matching the documented behavior. Also removed
+  a duplicate, drifted copy of the `redaction_log` schema that lived in
+  `redactor.py` itself instead of storage.py's canonical one.
+- **Found and fixed: unbounded relevance score.** `embedder.py` computed
+  `1 - distance` assuming ChromaDB's cosine distance ranges [0,1]; it
+  actually ranges [0,2] (distance = 1 - similarity, similarity in
+  [-1,1]). Real search results were showing 240%+ "relevance" in the UI.
+  Correct normalization is `1 - distance/2`, clamped to [0,1].
+- **Found and fixed (CRITICAL): the entire API was reachable with zero
+  credentials except `/setup` and `/sync`.** Confirmed live via a bare
+  `curl` call with no auth headers at all - `/search` returned full
+  conversation history, `/costs` returned real spend data,
+  `/review/reprocess` could trigger real API charges. The "Unlock
+  Device" screen was purely client-side (a localStorage flag), never
+  enforced server-side, despite the server binding `0.0.0.0` by design
+  for LAN/phone access. Fixed with a real server-side session: `/setup`
+  issues a short-lived (30 min), in-memory, HttpOnly cookie only after
+  real passphrase+TOTP verification; every route except `GET /`,
+  `GET /src/*`, and `POST /setup` now requires it; new `POST /logout`
+  actually invalidates it server-side (Lock used to only clear
+  client-side storage). 6 regression tests cover the gate directly.
+- **Devil's Advocate found 2 real gaps in that same fix**: `/setup` had
+  no rate limiting (Argon2id makes each guess expensive, not bounded in
+  count - added a 5-attempt/15-min per-IP lockout, verified live), and
+  the session cookie had no `Secure` flag, meaning it crossed the LAN in
+  cleartext - the exact threat model the fix was built to close. Now
+  `secure=request.is_secure` (tightens automatically if TLS is ever
+  added; hardcoding `secure=True` now would silently break login, since
+  browsers refuse Secure cookies over a non-HTTPS LAN origin). The
+  underlying "no TLS" gap is real and unfixed - flagged, not silently
+  decided, since it needs real cert-management design work.
+- **Devil's Advocate also flagged, correctly**: every summary pushed to
+  `claude-search-data` *before* the redaction fix landed is still
+  unredacted in that repo's git history. Decision with the user: leave
+  git history alone (private repo, Fernet-encrypted, real risk is low,
+  and a history rewrite right now risks the not-yet-migrated desktop's
+  clone) and instead reprocess existing sessions through the now-fixed
+  pipeline. Ran for real: 56 of 62 succeeded; the other 6 aren't
+  failures, they're `not_found` (5 real sessions with no readable raw
+  file - the same pre-existing gap `/health` has flagged all along - plus
+  the known `test-session-001` fixture row). Pushed live to GitHub
+  (`changesets/nobody174-laptop/...`), confirmed on `origin/main`.
+- **QA/Playtester found 2 real friction points** in the new session-gate
+  UX: a session expiring mid-use silently kicked the user back to
+  Unlock with zero explanation (now shows an actual "session expired"
+  message), and the import dropzone's success message told users to run
+  `cli.py collect` even though clicking Sync now auto-collects too.
+- **Design Critic**: result cards showed six roughly-equal-weight
+  signals (title, relevance %, tldr, source/device, date, top-pattern)
+  on a screen whose one job is "find it in a few seconds." De-emphasized
+  relevance %/top-pattern (muted instead of accent-colored) so
+  title+tldr read as the actual primary scan targets.
+- **Also added, separately**: `python-dotenv` was a listed dependency
+  since day one but `load_dotenv()` was never actually called anywhere -
+  every prior run only worked because a human/agent manually exported
+  `.env` into the shell first. Fixed in all three entry points; added
+  `start_server.bat` for a genuine double-click launch (which is what
+  actually needed the fix, since a double-clicked `.bat` has no shell
+  environment to inherit from).
+- **Process note for future reviews**: the roles found real,
+  independently-verifiable things at each step - this wasn't
+  review-theater. The one place effort was consciously *not* spent: a
+  full TLS/HTTPS setup, correctly identified as a real design decision
+  (cert management, phone trust prompts) rather than something to guess
+  at inside a fix-the-gaps pass.
 
 ---
 

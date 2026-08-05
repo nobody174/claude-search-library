@@ -5,7 +5,7 @@
 Collect Claude chats from all your devices. Summarize with AI. Search semantically. Sync encrypted to GitHub. Works offline.
 
 ![Status Badge](https://img.shields.io/badge/status-production-green)
-![Tests](https://img.shields.io/badge/tests-202%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-323%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ## What Is This?
@@ -22,7 +22,7 @@ You use Claude across multiple machines (home desktop, laptop at cabin, phone, t
 - 📱 **Access** — Search from desktop, laptop, phone (React web UI)
 - 🔌 **Offline** — Works completely offline, syncs when internet returns
 - 🩺 **Self-healing** — Web UI surfaces archive health directly and can repair/reprocess failed or pending sessions with one click, no CLI needed
-- ✅ **Test** — 202 Python + 10 Node tests, production-ready
+- ✅ **Test** — 323 Python + 10 Node tests, production-ready
 
 ## Quick Start
 
@@ -180,7 +180,7 @@ Encrypt & sync to GitHub (every 5 min)
     ↓
 Pull updates from other devices
     ↓
-Auto-merge (Last-Write-Wins, cr-sqlite when available)
+Auto-merge (real cr-sqlite CRDT — per-column, not whole-row)
     ↓
 Rebuild ChromaDB
     ↓
@@ -228,6 +228,8 @@ A: Run `python3 cli.py verify` to detect it, then `python3 -m src.storage --rest
 - **Two-factor key derivation**: `derive_encryption_key(passphrase, totp_secret)` combines both factors via Argon2id before producing a Fernet key — see `src/crypto.py`.
 - **The master passphrase is never stored** anywhere, on any device or on GitHub.
 - **Redaction before indexing**: API keys, GitHub/Discord tokens, AWS keys, emails, and IP addresses are auto-redacted from summaries; sessions with more than 3 redactions are flagged for manual review instead of being indexed automatically.
+- **Every API route requires a real server-side session**, not just a client-side flag: `/setup` verifies your passphrase + TOTP and issues a short-lived (30 min), HttpOnly session cookie — everything except the index page, static assets, and `/setup` itself requires it. `/setup` is rate-limited (5 attempts, then a 15-minute per-IP lockout). `Lock` in the UI actually invalidates the session server-side, not just local storage.
+- **No TLS by default** — this server runs over plain HTTP for LAN/phone access (see CLAUDE.md's Known Blockers), so the session cookie crosses your local network in cleartext. Fine for a trusted home network; if you're on a network you don't fully trust, put a reverse proxy with real TLS in front of it.
 - **CORS is restricted** to `localhost`/`127.0.0.1` by default in `server.py` — do not expose the API port directly to the public internet without adding your own auth/reverse-proxy layer.
 
 If you find a security issue, please open a private security advisory on GitHub rather than a public issue.
@@ -253,7 +255,7 @@ claude-search-library/
 ├── server.py             # Flask REST API
 ├── config_template.yaml  # Copy to config.yaml and fill in
 ├── requirements.txt
-└── tests/                 # 202 Python tests (pytest) + 10 Node tests (api.js)
+└── tests/                 # 323 Python tests (pytest) + 10 Node tests (api.js)
 ```
 
 ## Documentation
