@@ -115,7 +115,7 @@ and error paths traced from source, not this simplified summary), see
 ## Core Modules
 
 ### src/collector.py
-Scans 6 data sources:
+Scans 6 local data sources:
 1. Claude.ai (manual JSON exports, or the official Data Export via `src/claude_export_import.py`)
 2. VS Code Claude extension (~/.vscode/extensions/...)
 3. Claude Code (local `~/.claude/projects/*.jsonl` transcripts)
@@ -123,7 +123,37 @@ Scans 6 data sources:
 5. Cowork (local JSONL, same shape as Claude Code)
 6. Local folder (watch for new JSON)
 
+A 7th source, Android (`collect_from_claude_android()`), lives in a
+separate module — see `src/android_bridge.py` below — since it drives
+a connected device over ADB rather than reading a local file.
+
 **Output**: Normalized chat objects matching schema
+
+### src/android_bridge.py
+Drives a connected Android phone over ADB to extract Claude conversation
+content from its own screen, via `uiautomator dump` (Android's built-in
+accessibility-tree tool) — never touches claude.ai's servers, so none
+of the ToS concerns that ruled out iOS automation apply. Also reaches
+iPhone-originated conversations, since claude.ai syncs one account
+across every mobile client (see CHANGELOG.md's 2026-08-06 entries for
+the full investigation, and DEPLOYMENT_GUIDE.md's Step 10 for setup —
+split into "own Android phone" vs. "spare Android device as an iPhone
+bridge" instructions).
+
+- Split into pure parsing functions (real fixture-based tests,
+  `tests/test_android_bridge.py`) and device-driving functions that
+  shell out to `adb` (verified against real hardware, not unit-tested —
+  same split `collect_from_claude_desktop()` uses for its own
+  untestable IndexedDB path)
+- Role attribution (user vs. assistant) is inferred from a message's
+  container left-edge offset, not any explicit label — Claude's own
+  Android app sets neither `resource-id` nor `content-desc` for this
+- Deliberately **not** in `src/orchestration.py`'s default `SOURCES`
+  (only in `ALL_SOURCES`) — real device time per run, not something to
+  run silently on a sync timer. Requires `cli.py android-connect
+  <ip>:<port>` once, then `cli.py collect --source claude-android`
+
+**Output**: Normalized chat objects matching schema (same as `collector.py`)
 
 ### src/processor.py
 Calls Claude API to summarize each chat. The transcript is wrapped in

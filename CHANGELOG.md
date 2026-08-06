@@ -7,6 +7,87 @@ open see [ROADMAP.md](ROADMAP.md) (future features) and
 
 ---
 
+## 2026-08-06, continued — Android chat capture shipped, closing the Android+iOS gap for real
+
+**Trigger: the user's own question ("do iOS and Android Claude apps sync
+the same account?") reopened what had just been closed as unsolved.**
+Full arc in one session: research → live cross-device verification →
+an Architect design pass → real implementation → 4 real bugs found and
+fixed via live end-to-end testing → shipped and verified via the
+actual CLI.
+
+- **Discovery**: claude.ai conversations are one cloud-synced account
+  across every mobile client, not siloed per platform (confirmed via
+  Anthropic's own Help Center docs - the only documented siloing is
+  Desktop app vs. mobile/web). Verified live: a conversation started on
+  the user's iPhone appeared on an Android test phone within seconds
+  under the same account. This means an Android-side capture mechanism
+  reaches iPhone-originated conversations too, automatically - no
+  iOS-side automation needed, no jailbreak, no ToS violation, since
+  nothing ever touches the iPhone or claude.ai's servers directly.
+- **Role attribution solved** (flagged by an Architect design pass as a
+  hard blocker needing real investigation, not a guess): a message's
+  enclosing container's left-edge x-offset is the real signal - Claude's
+  replies sit in a full-width container starting at x=0; the user's own
+  messages sit in a narrower, indented container. Found by inspecting a
+  real device dump byte-for-byte, not assumed.
+- **Shipped `src/android_bridge.py`**: drives a connected Android phone
+  over ADB to extract conversation content via `uiautomator dump`
+  (Android's built-in accessibility-tree tool - free, no root, no paid
+  automation apps, contrary to the Tasker+AutoInput path initial
+  research suggested). Split into pure parsing functions (real
+  fixture-based tests, fixtures captured from an actual device) and
+  device-driving functions verified against a real Samsung Galaxy
+  Note20 Ultra during development - same testing split
+  `collect_from_claude_desktop()` uses for its own untestable
+  IndexedDB path.
+- **4 real bugs found via live end-to-end testing, not caught by unit
+  tests alone:**
+  1. `adb` wasn't resolvable via `subprocess` despite working in an
+     interactive shell (PATH differed) - fixed by resolving adb's real
+     path once (PATH first, falling back to the standard per-OS SDK
+     location).
+  2. Non-ASCII conversation text crashed subprocess output decoding on
+     Windows' default cp1252 console encoding - fixed by forcing UTF-8
+     explicitly.
+  3. `open_sidebar()` failed outright if the sidebar was already open
+     and scrolled (its "already open" check relied on text that can
+     scroll out of view) - fixed using a fixed-chrome `content-desc`
+     signal instead, plus a self-healing relaunch-and-retry for the
+     case where a stray BACK press exits the app to the home screen
+     entirely.
+  4. **The most serious**: `extract_conversation()` reused a
+     conversation's tap bounds captured during an earlier sidebar
+     enumeration pass - these go stale the moment the sidebar scrolls
+     again for any reason, including a previous conversation's own
+     extraction returning to a differently-scrolled sidebar. This
+     silently extracted the **wrong conversation's content** in a real
+     end-to-end run (returned real, plausible-looking text - just from
+     the wrong chat) before being caught by checking against a known
+     conversation's actual content. Fixed: every conversation is now
+     re-located by title text, scrolling from the top, immediately
+     before tapping.
+- **Wired into `src/orchestration.py`**: `claude-android` is
+  deliberately NOT in the default `SOURCES` set `cli.py sync` uses -
+  unlike every other collector, this drives live device UI for real
+  minutes per run and depends on a phone being reachable right now, not
+  something to run silently on a 5-minute timer. Added `ALL_SOURCES` for
+  the full set including it. New `cli.py collect --source
+  claude-android` and `cli.py android-connect <ip>:<port>` (establishes
+  and remembers a device connection, persisted to
+  `~/.claude-search-library/data/android_device.json`).
+- **Verified fully end-to-end via the real CLI**, not just the Python
+  API: `cli.py android-connect` + `cli.py collect --source
+  claude-android` against the real device collected and stored 16 real
+  conversations (7 genuinely new) with 0 errors, confirmed via
+  `cli.py verify` (still healthy) and direct database inspection - the
+  known test conversation's content matched exactly, word-for-word,
+  role-for-role.
+- Tests: 348 passed (16 new for `android_bridge.py`'s parsing functions,
+  against real fixture data, not hand-constructed).
+
+---
+
 ## 2026-08-06, continued — BACKLOG.md review, a real doc-flow diagram, and a genuine "no raw file" fix
 
 **Trigger: going through BACKLOG.md item by item for real suggested

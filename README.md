@@ -5,7 +5,7 @@
 Collect Claude chats from all your devices. Summarize with AI. Search semantically. Sync encrypted to GitHub. Works offline.
 
 ![Status Badge](https://img.shields.io/badge/status-production-green)
-![Tests](https://img.shields.io/badge/tests-329%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-348%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ## What Is This?
@@ -14,7 +14,7 @@ You use Claude across multiple machines (desktop, laptop, phone, tablet). Your c
 
 **Claude Search Library solves this:**
 
-- 📦 **Collect** — Gather chats from Claude.ai, Claude Code, Claude desktop app, Cowork, local folders
+- 📦 **Collect** — Gather chats from Claude.ai, Claude Code, Claude desktop app, Cowork, Android (incl. iPhone conversations via account sync), local folders
 - 🧠 **Summarize** — Claude API extracts learnings, patterns, reusable workflows
 - 🔍 **Search** — Semantic (finds by meaning) + keyword (FTS5, finds by exact words) hybrid search
 - 🌍 **Sync** — Multi-device sync via encrypted GitHub private repo
@@ -22,7 +22,7 @@ You use Claude across multiple machines (desktop, laptop, phone, tablet). Your c
 - 📱 **Access** — Search from desktop, laptop, phone (React web UI)
 - 🔌 **Offline** — Works completely offline, syncs when internet returns
 - 🩺 **Self-healing** — Web UI surfaces archive health directly and can repair/reprocess failed or pending sessions with one click, no CLI needed
-- ✅ **Test** — 329 Python + 10 Node tests, production-ready
+- ✅ **Test** — 348 Python + 10 Node tests, production-ready
 
 ## Quick Start
 
@@ -241,7 +241,8 @@ If you find a security issue, please open a private security advisory on GitHub 
 ```
 claude-search-library/
 ├── src/
-│   ├── collector.py     # Gather chats from Claude.ai, VS Code, Cowork, local
+│   ├── collector.py     # Gather chats from Claude.ai, VS Code, Claude Code, Claude desktop, Cowork, local
+│   ├── android_bridge.py # Gather chats from Android (+ iPhone via account sync) over ADB
 │   ├── processor.py     # Summarize via Claude API
 │   ├── redactor.py      # Secret detection & redaction
 │   ├── storage.py       # SQLite schema, CRUD, dedup, JSONL mirror, verify_archive
@@ -257,7 +258,7 @@ claude-search-library/
 ├── server.py             # Flask REST API
 ├── config_template.yaml  # Copy to config.yaml and fill in
 ├── requirements.txt
-└── tests/                 # 329 Python tests (pytest) + 10 Node tests (api.js)
+└── tests/                 # 348 Python tests (pytest) + 10 Node tests (api.js)
 ```
 
 ## Documentation
