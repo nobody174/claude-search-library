@@ -12,7 +12,7 @@ argon2-cffi>=23.1.0
 qrcode>=7.4.0
 
 # APIs & HTTP
-flask>=3.0.0
+flask>=3.1.3
 flask-cors>=4.0.0
 requests>=2.31.0
 gitpython>=3.1.0
