@@ -128,58 +128,96 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
   (IMAP polling for the download link) can't stand alone — it doesn't
   solve triggering the export in the first place, which is the actually
   -prohibited step.
-- **Checked whether anyone else has solved this — genuinely unsolved,
-  not a known problem with a known fix this project missed (2026-08-06).**
-  Anthropic's own Help Center is explicit: "Export is available on the
-  web app and Claude Desktop only. iOS and Android do not currently
-  support exports." No hidden Shortcuts/App Intent read capability
-  found. No consumer community forum for claude.ai (only the
-  developer-focused `anthropics/claude-code` repo, which has 3 separate
-  open feature requests asking for cross-surface history access -
-  #12858, #30673, #55787 - confirming this is a known pain point
-  Anthropic hasn't shipped a fix for, not something obscure). Reddit
-  searches returned nothing. Every existing third-party export tool
-  operates on the desktop/browser session, never the iOS app.
-- **Two things remain, not yet done:**
-  - **Draft message to Anthropic, parked as a genuine last resort** (not
-    sent yet — see below) asking whether a legitimate, ToS-sanctioned
-    consumer export/sync API for iOS is available or planned. Worth
-    trying since every self-built automated path is now confirmed
-    either technically dead or ToS-blocked - this is the one lead never
-    actually attempted.
-  - Reconsidering scope: is capturing *phone-originated* conversations
-    actually required, vs. using the phone purely as a search/reference
-    client (per the original CLAUDE.md Key Decision #5) and doing all
-    real conversation work on desktop/laptop where official export
-    works fine? With all three researched automation directions now
-    ruled out (2 technical, 1 legal), this is the practical fallback if
-    Anthropic has no plans here — not a first resort, but a real one.
-- Do not schedule implementation work here until a specific approach is
-  chosen — this entry exists to make sure the gap stays visible instead
-  of being silently dropped.
+- **Checked whether anyone else has solved this, twice — once by feature
+  name, once by mechanism (2026-08-06).** First pass (searching
+  "export"/"sync"/"backup" phrasing) found nothing. Broadened on the
+  reasonable suspicion that a real solution would be described by *what
+  was built*, not by matching feature-request wording — 9 varied
+  queries (screen-scraping/OCR + Claude iOS, casual "backup my chats"
+  phrasing, GitHub code search for `UIAccessibility`/`AXUIElement`/
+  `ReplayKit` + claude.ai, Tasker/MacroDroid + Claude on Android, HN's
+  own search engine, unofficial Discord). Found 7+ real, working
+  third-party tools (claude-archive, claude-backup, ClaudeKeep,
+  Tampermonkey userscripts, browser extensions) — every single one
+  targets the **claude.ai website** via Playwright/unofficial web
+  API/browser extension. Zero touch the native iOS app's sandboxed
+  content. Anthropic's own Help Center is explicit: "Export is
+  available on the web app and Claude Desktop only. iOS and Android do
+  not currently support exports." 3 open feature requests on
+  `anthropics/claude-code` (#12858, #30673, #55787) confirm cross-
+  surface history access is a known, unshipped pain point — not
+  something obscure. **Verdict: a genuine, non-obvious gap with no
+  known implementation by anyone, anywhere that surfaces publicly** —
+  not a search-phrasing failure on this project's part.
+- **Found the real contact channel (2026-08-06)**: no public feedback
+  board or standalone support email exists for consumer Claude.ai/iOS
+  product questions. The only real channel is in-app: claude.ai → your
+  name/initials (bottom left) → "Get help" → "Send us a message" (Fin,
+  the AI support bot, escalates to a human Product Support rep by email
+  if it can't answer). See the drafted message below.
+- **What's actually being asked for, made explicit** (three variants,
+  in order of how good an answer would be):
+  1. Best case: a real, documented API endpoint (gated by an actual API
+     key — the sanctioned channel Anthropic already has a carve-out
+     for) that lets a consumer pull their own stored conversation
+     history. Distinct from the existing developer Messages API, which
+     is stateless and has no concept of claude.ai's stored history at
+     all.
+  2. Good enough: an export trigger reachable via a real API call
+     instead of a manual web/desktop click — still something this
+     project would call once a day via `cli.py sync`, just not banned
+     by §3 the way scripting the web UI is.
+  3. Minimum useful answer: just confirmation of whether iOS/Android
+     export is planned at all. Even "no, not planned" is useful — it
+     turns the scope-reconsideration fallback below from "open-ended
+     hope" into a confident, final decision.
+- **The two live options below are one decision, not two separate
+  items** — ask Anthropic first; whatever they say determines whether
+  building resumes or the phone permanently stays a read/search-only
+  client:
+  - **Send the drafted message** (below) via the in-app channel found
+    above. Worth trying since every self-built automated path is now
+    confirmed either technically dead or ToS-blocked — this is the one
+    lead never actually attempted, and costs nothing to ask.
+  - **If the answer is no / no reply / nothing planned**: fall back to
+    reconsidering scope — accept that phone-originated conversations
+    aren't capturable right now, treat the phone purely as a
+    search/reference client (per the original CLAUDE.md Key Decision
+    #5), and do real conversation work on desktop/laptop where official
+    export already works fine. Not a first resort, but the honest
+    landing point if Anthropic has nothing to offer.
+- Do not schedule implementation work here until Anthropic's answer (or
+  lack of one) resolves which branch above applies — this entry exists
+  to make sure the gap stays visible instead of being silently dropped.
 
-### Draft message to Anthropic (not sent — parked for if/when this becomes the last resort)
+### Draft message to Anthropic (not sent — send via the in-app "Get help" flow above)
 
-> Subject: Legitimate/sanctioned way to export or sync Claude iOS conversation history?
->
 > Hi — I'm building a personal, local-first tool that archives and
 > searches my own Claude chat history across the devices I use (desktop
 > app, Claude Code, Cowork). It works well for everything except the
-> iOS app: Settings → Export Data is desktop/web-only, and the iOS
-> Shortcuts "Ask Claude" App Intent is send-only (no read/export
-> action). I've deliberately ruled out unofficial API scraping and any
-> automated interaction with claude.ai's web session, since your
-> Consumer Terms §3 explicitly prohibit automated/non-human access with
-> no exception I could find for a user accessing their own data.
+> iOS app.
 >
-> Is there, or is there planned to be, any sanctioned way for a
-> consumer account to programmatically retrieve their own conversation
-> history from the iOS app — e.g. a scoped API endpoint gated by a real
-> API key, or an export trigger reachable outside the manual
-> Settings → Export Data + email-link flow? I'd rather ask directly than
-> build something that risks violating your terms.
+> I know Settings → Export Data is desktop/web-only today, and that the
+> iOS Shortcuts "Ask Claude" integration is send-only with no way to
+> read or export existing conversations. I've deliberately ruled out
+> unofficial API scraping and any automated interaction with the
+> claude.ai web session, since your Consumer Terms explicitly prohibit
+> automated/non-human access and I couldn't find an exception for a
+> user accessing their own data.
 >
-> Thanks for your time.
+> Is there, or is there any plan for, a sanctioned way for a consumer
+> account to retrieve their own conversation history from the iOS app —
+> e.g. an API endpoint gated by a real API key, or an export trigger
+> reachable outside the manual web/desktop + email-link flow? Even
+> knowing it's not planned would be genuinely useful — I'd rather ask
+> directly than build something that risks violating your terms.
+>
+> Thanks for your time!
+
+*(This is a first draft to send through claude.ai's "Get help" chat,
+not a formal email — no subject line needed, tone can be adjusted
+before sending. Real conversational back-and-forth with Fin/a human rep
+may be needed rather than one message landing a full answer.)*
 
 *(Adjust tone/detail before actually sending — this is a first draft,
 not final copy. Send via Anthropic's support channel, not a public
