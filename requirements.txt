@@ -6,7 +6,7 @@ anthropic>=0.7.0
 python-dotenv>=1.0.0
 
 # Encryption & Security
-cryptography>=41.0.0
+cryptography>=50.0.0
 pyotp>=2.9.0
 argon2-cffi>=23.1.0
 qrcode>=7.4.0
