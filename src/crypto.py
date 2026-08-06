@@ -423,6 +423,15 @@ def show_totp_qr_again() -> None:
     with). No session cache is written here (unlike
     join_device_existing_setup()) - this is a one-off display action,
     not a login, and doesn't derive/need the encryption key at all.
+
+    Deliberately raises specific "which factor was wrong" messages (C-3,
+    Project Reviewer 2026-08-06) unlike resolve_encryption_key()'s
+    generic "Invalid passphrase"/collapsed errors - that function is
+    server-facing (server.py, an untrusted network caller each request),
+    this one is CLI-facing (a human already sitting at the machine's own
+    terminal), so there's no remote caller to leak factor-specific
+    information to. Revisit if this function ever grows a network-facing
+    caller.
     """
     _setup_file_logging()
 
@@ -442,6 +451,9 @@ def show_totp_qr_again() -> None:
 
     uri = build_totp_uri(totp_secret)
     print("Scan this QR code into a new Google Authenticator instance:")
+    print("(Note: this encodes your raw TOTP secret - avoid running this while screen")
+    print("sharing or recording. There is currently no rotation/revocation flow if it")
+    print("leaks; see BACKLOG.md.)")
     display_qr_code(uri)
     logger.info("show_totp_qr_again: QR re-displayed after successful verification")
 

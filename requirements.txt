@@ -42,3 +42,10 @@ git+https://github.com/obsidianforensics/ccl_chrome_indexeddb.git
 # Development (optional)
 pytest>=7.0.0
 pytest-cov>=4.0.0
+
+# Android chat-capture bridge (src/android_bridge.py) - NOT a pip package.
+# Requires the Android SDK's platform-tools (specifically `adb`) installed
+# separately and reachable on PATH, or at the default per-platform SDK
+# install location (see android_bridge.py's _resolve_adb_path()). See
+# DEPLOYMENT_GUIDE.md for the full setup walkthrough (enabling Wireless
+# debugging on the phone, pairing, etc).

@@ -95,6 +95,12 @@ def _resolve_adb_path() -> str:
         _adb_path = str(candidate)
         return _adb_path
 
+    # Deliberately includes the local filesystem path in the message (R-6,
+    # Project Reviewer 2026-08-06): this exception is CLI-only, surfaces
+    # on the user's own machine, and is never logged to a file, synced, or
+    # committed anywhere - the path is the whole point (tells the user
+    # exactly where to look), so redacting it here would only make the
+    # error less actionable for no real exposure reduction.
     raise AndroidNotConnectedError(
         "Could not find adb (Android SDK platform-tools) on PATH or at the "
         f"default SDK location ({candidate}). Install Android SDK "
@@ -116,6 +122,14 @@ DEVICE_STATE_PATH = Path.home() / ".claude-search-library" / "data" / "android_d
 # in practice.
 _ROLE_INDENT_THRESHOLD_FRACTION = 0.04
 
+# Minimum width (as a fraction of screen width) for a container to be
+# considered a message-group wrapper rather than a button/icon/chrome
+# element. Derived from the same real sample as the threshold above
+# (400px on a 1080px screen = ~37%) - was previously a hardcoded pixel
+# value that silently assumed a 1080px-wide screen; expressed as a
+# fraction here so it scales correctly on other real device widths.
+_MIN_MESSAGE_CONTAINER_WIDTH_FRACTION = 400 / 1080
+
 
 class AndroidNotConnectedError(RuntimeError):
     """No Android device is reachable - connect_device() failed, or no
@@ -128,6 +142,16 @@ class AndroidUIElementNotFoundError(RuntimeError):
     matches this project's existing philosophy of failing loudly on a
     genuine mismatch rather than silently misparsing (see
     SchemaTooNewError in src/storage.py)."""
+
+
+class AndroidDumpFailedError(AndroidUIElementNotFoundError):
+    """dump_ui() exhausted its retries without ever getting a dump
+    containing a real <hierarchy> root - the returned text is the last
+    failed attempt's stdout, not a genuine (if unexpected) screen state.
+    Distinct from AndroidUIElementNotFoundError's normal case (a real
+    dump that just doesn't contain the expected element) so callers and
+    error messages can tell "the device stopped responding" apart from
+    "the app is showing something we didn't expect"."""
 
 
 # --- Pure parsing functions (unit-testable, no subprocess/network) -----
@@ -180,7 +204,7 @@ def parse_message_bubbles(xml: str, screen_width: int) -> list[dict]:
     since real devices vary.
     """
     threshold_x = screen_width * _ROLE_INDENT_THRESHOLD_FRACTION
-    groups = _group_message_nodes_by_container(xml)
+    groups = _group_message_nodes_by_container(xml, screen_width)
     bubbles = []
     for container_x1, texts in groups:
         if not texts:
@@ -193,7 +217,7 @@ def parse_message_bubbles(xml: str, screen_width: int) -> list[dict]:
 _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 
-def _group_message_nodes_by_container(xml: str) -> list[tuple[int, list[str]]]:
+def _group_message_nodes_by_container(xml: str, screen_width: int) -> list[tuple[int, list[str]]]:
     """Walk the dump's real element tree (not regex - nested XML needs
     a real parser to group text correctly by ancestor container) for the
     shallowest View containers wide enough to be a message-group wrapper
@@ -209,7 +233,8 @@ def _group_message_nodes_by_container(xml: str) -> list[tuple[int, list[str]]]:
     """
     root = ET.fromstring(xml)
     groups: list[tuple[int, list[str]]] = []
-    _walk_for_message_containers(root, groups, min_width=400)
+    min_width = int(screen_width * _MIN_MESSAGE_CONTAINER_WIDTH_FRACTION)
+    _walk_for_message_containers(root, groups, min_width=min_width)
     return groups
 
 
@@ -335,6 +360,13 @@ def _screen_width_from_dump(xml: str) -> int:
     return int(m.group(1))
 
 
+def _screen_height_from_dump(xml: str) -> int:
+    m = re.search(r'bounds="\[0,0\]\[\d+,(\d+)\]"', xml)
+    if not m:
+        raise AndroidUIElementNotFoundError("Could not find a full-screen root node to read screen height from")
+    return int(m.group(1))
+
+
 # --- Device-driving functions (real ADB, not unit-tested) --------------
 
 def _run_adb(args: list[str], device: Optional[str] = None, timeout: float = 15.0) -> subprocess.CompletedProcess:
@@ -348,7 +380,14 @@ def _run_adb(args: list[str], device: Optional[str] = None, timeout: float = 15.
     # encoding (cp1252) can't decode adb's UTF-8 stdout, raising
     # UnicodeDecodeError deep inside subprocess's reader thread rather
     # than a clean, catchable error at the call site.
-    return subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout)
+    try:
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise AndroidNotConnectedError(
+            f"adb command timed out after {timeout}s: {' '.join(args)} - device may have "
+            "gone unreachable over WiFi mid-run (see connect_device()'s docstring for "
+            "reconnecting)."
+        ) from e
 
 
 def connect_device(address: Optional[str] = None) -> str:
@@ -416,7 +455,14 @@ def dump_ui(device: str, retries: int = 2) -> str:
     runs, since it isn't itself aware of in-flight UI changes. A dump
     missing even the root `<hierarchy>` node isn't a real screen state
     to parse - it's a transient capture failure, worth one retry before
-    surfacing to the caller as real content."""
+    surfacing to the caller as real content.
+
+    Raises AndroidDumpFailedError (not a silent empty/failed string) if
+    every attempt fails - previously this returned the last failed
+    attempt's stdout as if it were real content, so a downstream parse
+    error would misleadingly look like "the screen doesn't match what we
+    expected" instead of "the dump itself never worked"."""
+    result = None
     for attempt in range(retries + 1):
         _run_adb(["shell", "uiautomator", "dump", "/sdcard/csl_dump.xml"], device=device)
         result = _run_adb(["shell", "cat", "/sdcard/csl_dump.xml"], device=device)
@@ -425,7 +471,10 @@ def dump_ui(device: str, retries: int = 2) -> str:
         if attempt < retries:
             logger.info("uiautomator dump returned no <hierarchy> (attempt %d/%d) - retrying", attempt + 1, retries)
             time.sleep(1)
-    return result.stdout  # let the caller's own parsing raise a specific error
+    raise AndroidDumpFailedError(
+        f"uiautomator dump failed to produce a valid <hierarchy> after {retries + 1} attempt(s); "
+        f"last output: {result.stdout[:200]!r}"
+    )
 
 
 def tap_bounds(device: str, bounds: str) -> None:
@@ -544,7 +593,7 @@ def _find_conversation_bounds_by_title(device: str, title: str, max_scroll_steps
         for c in parse_conversation_list(xml):
             if c["title"] == title and c["bounds"] != "[0,0][0,0]":
                 return c["bounds"]
-        screen_height = int(re.search(r'bounds="\[0,0\]\[\d+,(\d+)\]"', xml).group(1))
+        screen_height = _screen_height_from_dump(xml)
         scroll_up_conversation(device, screen_height)
 
     raise AndroidUIElementNotFoundError(f"Conversation titled {title!r} not found in sidebar after scrolling")
@@ -561,7 +610,7 @@ def extract_conversation(device: str, conversation: dict, max_scroll_steps: int 
 
     first_xml = dump_ui(device)
     screen_width = _screen_width_from_dump(first_xml)
-    screen_height = int(re.search(r'bounds="\[0,0\]\[\d+,(\d+)\]"', first_xml).group(1))
+    screen_height = _screen_height_from_dump(first_xml)
 
     pages = [parse_message_bubbles(first_xml, screen_width)]
     for _ in range(max_scroll_steps):
@@ -603,7 +652,7 @@ def enumerate_conversations(device: str, max_scroll_steps: int = 50) -> list[dic
         if curr_titles <= prev_titles:
             break
         prev_titles = curr_titles
-        screen_height = int(re.search(r'bounds="\[0,0\]\[\d+,(\d+)\]"', xml).group(1))
+        screen_height = _screen_height_from_dump(xml)
         scroll_up_conversation(device, screen_height)
 
     return all_convos
