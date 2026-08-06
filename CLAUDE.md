@@ -409,7 +409,19 @@ python3 -m pytest tests/test_sync.py -v
 
 # All tests
 python3 -m pytest tests/ -v --cov=src
+
+# src/api.js (the web UI's fetch wrapper) - separate from the Python
+# suite above, run via Node's built-in test runner, no npm deps
+node --test tests/js/
 ```
+
+**CI**: `.github/workflows/ci.yml` runs on every push/PR to `main` — ruff
+(lint, hard-fail), bandit + pip-audit (security), the JS suite above, then
+the full pytest suite, staged so cheap checks fail first. `codeql.yml`
+runs CodeQL (Python + JavaScript) on the same triggers plus a weekly
+schedule. No CD/deploy stage — this project has no deploy target
+(`git pull`, not a packaged release; see BACKLOG.md's Release Manager
+entry for why no version numbers exist either).
 
 ---
 
