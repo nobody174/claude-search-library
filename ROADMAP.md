@@ -55,15 +55,34 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
   request, or the current user's own usage pattern changing) — Web Chat
   Import already covers this as a manual safety net in the meantime.
 
-## Android chat capture via ADB + accessibility tree (HIGH — core mechanism proven)
-- Problem: same underlying gap as iOS (see BACKLOG.md's closed iOS
-  entry) — the Claude Android app has no export/read capability
-  (confirmed: App Actions/widgets are send-only, same as iOS; official
-  export is desktop/web-only on Android too, confirmed directly by
-  Anthropic). Unlike iOS, though, Android doesn't require jailbreaking
-  or violating Anthropic's Consumer Terms to solve this — the OS itself
-  exposes a real, legitimate mechanism that never touches claude.ai's
-  servers at all.
+## Android + iOS chat capture via ADB + accessibility tree, using Android as a bridge (HIGH — core mechanism proven end-to-end)
+- **This entry now covers both Android and iOS.** iOS was previously
+  closed as genuinely unsolved (see CHANGELOG.md's 2026-08-06 entries)
+  — that finding was correct for "automate something on the iPhone
+  itself," but missed a real angle: **claude.ai conversations are one
+  cloud-synced account across every mobile client, not siloed per
+  platform** (confirmed via Anthropic's own Help Center docs on
+  Android/iOS app usage; the only documented siloing is Desktop app vs.
+  mobile/web, which doesn't apply here). A conversation started on
+  iPhone shows up on Android under the same account, in seconds, no
+  manual action needed. **Verified live, 2026-08-06**: started a real,
+  new conversation on the user's iPhone, and within seconds it appeared
+  at the top of "Recents" on the Android test phone — opened it there
+  and confirmed the full message text (both the user's message and
+  Claude's reply) was completely extractable via `uiautomator dump`.
+  This means an Android-side capture mechanism captures iOS-originated
+  conversations too, automatically, as a side effect of the account
+  being shared — no iOS-side automation needed at all, no jailbreak, no
+  ToS violation, since nothing ever touches the iPhone or claude.ai's
+  servers directly.
+- Problem (both platforms): the Claude Android and iOS apps have no
+  export/read capability (confirmed: App Actions/widgets/Shortcuts are
+  send-only on both; official export is desktop/web-only on both,
+  confirmed directly by Anthropic). Android doesn't require
+  jailbreaking or violating Anthropic's Consumer Terms to solve this,
+  though — the OS itself exposes a real, legitimate mechanism that
+  never touches claude.ai's servers at all, and per the account-sync
+  finding above, this single mechanism now closes the gap for iOS too.
 - **Core mechanism empirically proven working, 2026-08-06, on a real
   device** (Samsung Galaxy Note20 Ultra, Android 13, connected via `adb
   connect <phone-ip>:<port>` over WiFi — same wireless-debugging setup
@@ -75,7 +94,11 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
   message — not a custom-rendered opaque canvas hiding content from
   accessibility tools, which was the real open risk research had
   flagged. This settles the one empirical unknown the 2026-08-06
-  research pass identified as needing real hardware to answer.
+  research pass identified as needing real hardware to answer. The
+  follow-up cross-device test (a real iPhone conversation → visible and
+  fully extractable on Android within seconds) settles the second real
+  unknown: whether Android-side capture would actually reach
+  iOS-originated content, not just Android-originated content.
 - **What's proven vs. what still needs building:**
   - Proven: `adb connect` over WiFi works reliably (reused a prior
     working setup, reconnected in seconds once given the phone's
@@ -116,13 +139,15 @@ edge cases see [BACKLOG.md](BACKLOG.md); for what's already shipped see
   proven mechanism and real scope; actual build work (scroll/loop
   logic, XML-to-transcript parsing, a real `collect_from_claude_android()`
   in `src/collector.py`) hasn't started.
-
----
-
-*iOS chat capture was researched exhaustively — see [BACKLOG.md](BACKLOG.md)'s
-"Decided, closed" section — and moved there 2026-08-06 as a settled
-decision, not a future feature: no automated path exists that doesn't
-violate Anthropic's Consumer Terms or require jailbreaking, confirmed
-directly by Anthropic's own support channel. Android's real advantage
-(see above) is exactly the OS-level accessibility mechanism iOS
-structurally lacks.*
+- **History note**: iOS chat capture was previously researched
+  exhaustively (2026-08-02 and 2026-08-06, multiple passes — see
+  CHANGELOG.md) and correctly closed as unsolved *for iOS-side
+  automation specifically* — every technical path was either dead
+  (Shortcuts/Accessibility has no third-party read hook, CDP automation
+  of the desktop app is empirically confirmed dead) or ToS-blocked
+  (automating the official export flow). That research was thorough and
+  correct on its own terms; it just hadn't yet considered that the
+  fix didn't need to touch iOS at all. The account-sync discovery above
+  reopens the outcome without invalidating any of that earlier work —
+  it's a different mechanism entirely (Android as a bridge), not a hole
+  in the prior research.
