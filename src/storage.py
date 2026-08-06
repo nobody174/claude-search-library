@@ -204,7 +204,10 @@ SESSION_COLUMNS = [
     "synced_at", "sync_version",
 ]
 
-SUMMARY_JSON_FIELDS = {"learnings", "patterns", "tags", "mentioned_tools", "mentioned_languages", "mentioned_frameworks", "topic_categories"}
+SUMMARY_JSON_FIELDS = {
+    "learnings", "patterns", "tags", "mentioned_tools",
+    "mentioned_languages", "mentioned_frameworks", "topic_categories",
+}
 
 _local = threading.local()
 
@@ -755,7 +758,10 @@ class Storage:
                 return {"status": "skipped_duplicate", "hash": content_hash, "id": session_dict["id"]}
             updated_fields = {
                 k: session_dict.get(k)
-                for k in ("title", "updated_at", "message_count", "user_message_count", "assistant_message_count", "raw_file_path")
+                for k in (
+                    "title", "updated_at", "message_count", "user_message_count",
+                    "assistant_message_count", "raw_file_path",
+                )
                 if k in session_dict
             }
             updated_fields["content_hash"] = content_hash
@@ -1100,7 +1106,9 @@ class Storage:
             stats["sessions_with_summary_path"] = len(local_summary_rows)
             stats["summary_sidecar_files_missing"] = len(missing_summaries)
             if missing_summaries:
-                warnings.append(f"{len(missing_summaries)} session(s) reference a summary sidecar file that no longer exists")
+                warnings.append(
+                    f"{len(missing_summaries)} session(s) reference a summary sidecar file that no longer exists"
+                )
 
             checks_passed += 1
         except Exception as e:

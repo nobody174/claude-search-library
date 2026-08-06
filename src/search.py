@@ -97,7 +97,13 @@ def _build_result(session_id: str, relevance_score: float, db: Storage) -> Optio
     }, session, summary
 
 
-def semantic_search(query: str, top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None, chroma_path: Optional[str] = None) -> list:
+def semantic_search(
+    query: str,
+    top_k: int = 10,
+    filters: Optional[dict] = None,
+    db_path: Optional[str] = None,
+    chroma_path: Optional[str] = None,
+) -> list:
     """Semantic search over session summaries via ChromaDB, enriched with SQLite data."""
     chroma_results = _chroma_semantic_search(query, top_k=top_k * 3 if filters else top_k, chroma_path=chroma_path)
 
@@ -148,7 +154,9 @@ def keyword_search(query: str, top_k: int = 10, filters: Optional[dict] = None, 
     return results
 
 
-def keyword_search_like(query: str, top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None) -> list:
+def keyword_search_like(
+    query: str, top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None
+) -> list:
     """Keyword search via SQL LIKE against the search_index table.
 
     This is the original (pre-FTS5) keyword search implementation, kept as
@@ -307,7 +315,9 @@ class HybridSearch:
             logger.warning("Keyword search failed: %s", e)
             return []
 
-    def hybrid_search(self, query: str, top_k: int = 10, filters: Optional[dict] = None, timeout_ms: float = 500) -> list:
+    def hybrid_search(
+        self, query: str, top_k: int = 10, filters: Optional[dict] = None, timeout_ms: float = 500
+    ) -> list:
         return hybrid_search(
             query, top_k=top_k, filters=filters, db_path=self.storage.db_path, timeout_ms=timeout_ms
         )

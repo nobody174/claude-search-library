@@ -7,6 +7,44 @@ open see [ROADMAP.md](ROADMAP.md) (future features) and
 
 ---
 
+## 2026-08-06, continued — closing 3 known CI/CD gaps after going public
+
+**Trigger: the user asked to genuinely close, not just document, the 3
+gaps flagged in the DevOps Engineer pass's own honest self-assessment**
+(advisory-only lint debt, zero web UI test coverage, no CodeQL) rather
+than leaving them as accepted risk.
+
+- **Ruff advisory pass -> hard-fail**: the one-time cleanup (9 pre-existing
+  `E501` line-too-long findings across `crypto.py`, `processor.py`,
+  `redactor.py`, `search.py`, `storage.py` - all safe line-wraps, no logic
+  changes) is done, 0 findings. `.github/workflows/ci.yml`'s style pass
+  now hard-fails like the syntax-error pass beside it, so new code can't
+  reintroduce the debt that was just paid off.
+- **`src/api.js` gained real test coverage**: 20 tests
+  (`tests/js/api.test.js`, run via Node's built-in test runner - no
+  Jest/Vitest, matching this project's no-build-step frontend
+  philosophy) covering the previously-untested real logic: the 401
+  session-expiry event dispatch (and that `/setup`'s own 401 correctly
+  does NOT trigger it), `reprocessReview()`'s confirm-flag requirement
+  (a real regression risk given server.py's R-2 fix depends on the
+  client sending it correctly), query-param building, and error-body
+  fallback handling. `public/index.html`'s React components themselves
+  remain uncovered by automated tests - no build step exists to run them
+  under, and introducing jsdom/a component framework for one file was
+  judged disproportionate; they stay covered by manual verification
+  (see this file's Design Critic entry).
+- **CodeQL added** (`.github/workflows/codeql.yml`): free on public repos,
+  runs on push/PR plus a weekly schedule, Python + JavaScript. Genuinely
+  free now that the repo is public, no reason to leave it off.
+- `ci.yml` gained a `js-test` job (parallel with lint/security, gates the
+  Python test job via `needs:` alongside them).
+
+All 361 Python tests + 20 new JS tests pass; every CI check (ruff x2,
+bandit, pip-audit, js-test) verified clean locally before pushing, then
+confirmed green on GitHub's real windows-latest runners.
+
+---
+
 ## 2026-08-06, continued — pre-public-release gauntlet: 7-role review, 2 real bugs found and fixed
 
 **Trigger: the user asked for a full professional-grade pre-release

@@ -1,0 +1,8 @@
+{
+  "name": "claude-search-library",
+  "private": true,
+  "description": "Test runner config for src/api.js - the project has no build step or frontend package by design (see public/index.html's own comments); this file exists only so `node --test` has somewhere to record scripts, not to introduce a bundler/npm dependency tree.",
+  "scripts": {
+    "test": "node --test tests/js/"
+  }
+}

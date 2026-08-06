@@ -14,6 +14,10 @@ venv/
 env/
 ENV/
 
+# Node (tests/js/ uses node --test, no build step/deps today, but this
+# guards against node_modules ever landing in git if that changes)
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]

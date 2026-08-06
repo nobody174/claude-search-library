@@ -36,7 +36,12 @@ REVIEW_THRESHOLD = 3
 REDACTION_PATTERNS = [
     ("github_token", re.compile(r"ghp_[a-zA-Z0-9]{36}"), "[GH_TOKEN_REDACTED]", 0.99),
     ("aws_key", re.compile(r"AKIA[0-9A-Z]{16}"), "[AWS_KEY_REDACTED]", 0.99),
-    ("discord_token", re.compile(r"[MN][a-zA-Z\d]{23}\.[a-zA-Z\d-]{6}\.[a-zA-Z\d_-]{27}"), "[DISCORD_TOKEN_REDACTED]", 0.95),
+    (
+        "discord_token",
+        re.compile(r"[MN][a-zA-Z\d]{23}\.[a-zA-Z\d-]{6}\.[a-zA-Z\d_-]{27}"),
+        "[DISCORD_TOKEN_REDACTED]",
+        0.95,
+    ),
     ("api_key", re.compile(r"api_?key.{0,40}?[a-zA-Z0-9]{20,}", re.IGNORECASE), "[API_KEY_REDACTED]", 0.9),
     ("patreon_link", re.compile(r"patreon\.com/[^\s]+", re.IGNORECASE), "[PATREON_LINK]", 0.85),
     ("email", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "[EMAIL_REDACTED]", 0.8),

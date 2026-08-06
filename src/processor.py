@@ -241,7 +241,9 @@ def summarize_chat(chat_dict: dict, api_key: str, usage_sink: Optional[list] = N
         return summary
 
     _log_event(session_id, "failed", str(last_error))
-    raise ValueError(f"Failed to parse summary JSON for session {session_id} after {MAX_JSON_RETRIES} attempts") from last_error
+    raise ValueError(
+        f"Failed to parse summary JSON for session {session_id} after {MAX_JSON_RETRIES} attempts"
+    ) from last_error
 
 
 def _save_needs_review(chat_dict: dict, partial_summary: dict) -> None:

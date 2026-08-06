@@ -447,7 +447,10 @@ def show_totp_qr_again() -> None:
 
     if not verify_totp_code(totp_secret, totp_code):
         logger.warning("show_totp_qr_again: TOTP verification failed")
-        raise ValueError("Invalid TOTP code — scan the QR with an already-enrolled device first if you don't have a working code")
+        raise ValueError(
+            "Invalid TOTP code — scan the QR with an already-enrolled device first "
+            "if you don't have a working code"
+        )
 
     uri = build_totp_uri(totp_secret)
     print("Scan this QR code into a new Google Authenticator instance:")

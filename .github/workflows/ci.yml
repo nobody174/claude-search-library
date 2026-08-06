@@ -45,16 +45,16 @@ jobs:
         # full stop, so this gates everything after it.
         run: python -m ruff check src cli.py server.py --select=E9,F821,F822,F823
 
-      - name: Lint (advisory - style, unused imports, modernization)
+      - name: Lint (style, unused imports, modernization)
         # Config lives in pyproject.toml ([tool.ruff]/[tool.ruff.lint]).
-        # Report-only: this codebase had no prior linting in place, so a
-        # first pass surfacing every pre-existing style deviation as a
-        # hard CI failure would block unrelated PRs on unrelated debt.
-        # continue-on-error keeps it visible in the run summary without
-        # gating merges; see pyproject.toml's comments for exactly which
-        # rules are selected/ignored and why.
+        # Started as report-only (continue-on-error) when this workflow was
+        # first added, since this codebase had no prior linting in place -
+        # that one-time cleanup pass is done (0 findings as of 2026-08-06,
+        # see CHANGELOG.md), so this now hard-fails like the syntax-error
+        # pass above: new code shouldn't get to reintroduce the debt that
+        # was just paid off. See pyproject.toml's comments for exactly
+        # which rules are selected/ignored and why.
         run: python -m ruff check src cli.py server.py
-        continue-on-error: true
 
   # Runs in parallel with lint (both are fast/cheap and independent) but
   # tests below wait on both via needs:.
@@ -103,8 +103,28 @@ jobs:
           # never reachable. No fixed release exists upstream yet as of
           # writing; re-check this ignore whenever chromadb is bumped.
 
+  # Covers src/api.js (the fetch wrapper public/index.html calls) - real,
+  # previously-untested logic (401 session-expiry detection, the
+  # reprocessReview confirm-flag requirement, query-param building). Does
+  # NOT cover public/index.html's React components themselves - that file
+  # has no build step by design (CDN-loaded React, no bundler) and no
+  # existing harness to run them under; they stay covered by manual
+  # verification (see CHANGELOG.md's Design Critic pass) rather than
+  # introducing jsdom/a component-test framework for this one file.
+  # Node's own built-in test runner, not Jest/Vitest - no npm dependency
+  # tree needed for a project that otherwise has none on the frontend.
+  js-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run src/api.js tests
+        run: node --test tests/js/
+
   test:
-    needs: [lint, security]
+    needs: [lint, security, js-test]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

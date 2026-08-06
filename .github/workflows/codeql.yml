@@ -1,0 +1,39 @@
+name: CodeQL
+
+# Free on public repos, catches a different class of thing than bandit/
+# pip-audit (ci.yml's security job): dataflow-based vulnerability
+# patterns (e.g. tainted input reaching a dangerous sink across several
+# function calls) rather than single-line static-analysis heuristics or
+# known-CVE dependency matching. Added once this repo went public -
+# genuinely free at that point, no reason not to run it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, not on every push - CodeQL's own scan is significantly
+    # slower than ci.yml's jobs; a push-triggered run already covers new
+    # code, this catches drift (e.g. a newly-published query pattern)
+    # against code that hasn't changed recently.
+    - cron: "0 6 * * 1"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      matrix:
+        language: ["python", "javascript"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

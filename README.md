@@ -22,7 +22,7 @@ You use Claude across multiple machines (desktop, laptop, phone, tablet). Your c
 - 📱 **Access** — Search from desktop, laptop, phone (React web UI)
 - 🔌 **Offline** — Works completely offline, syncs when internet returns
 - 🩺 **Self-healing** — Web UI surfaces archive health directly and can repair/reprocess failed or pending sessions with one click, no CLI needed
-- ✅ **Test** — 361 Python tests (pytest), production-ready
+- ✅ **Test** — 361 Python tests (pytest) + 20 JS tests (node --test), production-ready
 
 ## Quick Start
 
@@ -261,7 +261,7 @@ claude-search-library/
 ├── server.py             # Flask REST API
 ├── config_template.yaml  # Copy to config.yaml and fill in
 ├── requirements.txt
-└── tests/                 # 361 Python tests (pytest)
+└── tests/                 # 361 Python tests (pytest) + 20 JS tests (tests/js/, node --test)
 ```
 
 ## Documentation
