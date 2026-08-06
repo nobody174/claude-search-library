@@ -54,6 +54,16 @@ This fetches your encrypted TOTP secret from GitHub, decrypts it using **only yo
 
 If you've also lost the passphrase, there is currently no recovery path — this is intentional (the passphrase is never stored anywhere, by design), but it does mean you must keep it safe in a password manager. A backup-codes mechanism exists in the code (`generate_backup_codes()` in `src/crypto.py`) but is not yet wired into the setup flow in this release.
 
+### Want to add a second phone — but my CURRENT phone still works fine
+
+**This is not the "lost my phone" case above — if your phone is lost, broken, or you have no working Authenticator code at all, use `--join-device` above instead.** This section is only for when your existing phone/Authenticator still works and you want to *also* set up a second one (a spare phone, or scanning into a replacement before wiping the old one) — you don't need the full `--join-device` flow for that:
+
+```bash
+python3 cli.py show-totp-qr
+```
+
+This requires proving you already have access: your passphrase, **and** a currently-valid code from your existing Authenticator app. If you don't have a working code at all (the "lost my phone" case above), use `--join-device` instead — `show-totp-qr` won't help you there, since it needs an existing code to prove access with.
+
 ### I set a weak/short passphrase and want to change it
 
 There's currently no rotate-passphrase command. The practical approach is to run `--setup` again to establish a fresh passphrase + TOTP secret, then re-sync all devices with `--join-device`. Treat this as effectively starting a new archive identity — plan for some manual re-sync work on every device.

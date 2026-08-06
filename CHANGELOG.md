@@ -7,6 +7,33 @@ open see [ROADMAP.md](ROADMAP.md) (future features) and
 
 ---
 
+## 2026-08-06, continued — mobile TOTP re-provisioning shipped
+
+**Trigger: real friction the Android/TOTP work made obvious** — setting
+up a new device already shows the TOTP QR code once, but there was no
+way to see it again later (lost phone, phone reset, adding a second
+phone) without redoing the entire `--join-device` flow.
+
+- **Shipped `show_totp_qr_again()`** in `src/crypto.py`, wired into
+  `cli.py show-totp-qr`. Reuses the same fetch+decrypt path
+  `join_device_existing_setup()` already has, with two deliberate
+  differences: requires the same proof-of-access bar as joining a
+  device (passphrase AND a currently-valid TOTP code from an
+  already-enrolled device, not just the passphrase alone); does NOT
+  write a session cache, since this is a one-off display action, not a
+  login — it always demands fresh proof rather than ever benefiting
+  from the existing "stay logged in" cache window.
+- Real security question asked and answered during review: is a local
+  CLI command like this reachable by someone else on the same network?
+  No — it's a local terminal command with no listening port, only
+  runs if someone already has shell access to the machine, and even
+  then requires both factors to actually see anything.
+- Tests: 4 new (valid credentials displays the real QR, wrong
+  passphrase rejected, wrong TOTP code rejected, no session cache
+  written). 352 total passing.
+
+---
+
 ## 2026-08-06, continued — Android chat capture shipped, closing the Android+iOS gap for real
 
 **Trigger: the user's own question ("do iOS and Android Claude apps sync
