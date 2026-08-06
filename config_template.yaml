@@ -3,7 +3,7 @@ api:
 
 storage:
   data_dir: ~/.claude-search-library
-  db_path: ~/.claude-search-library/library.db
+  db_path: ~/.claude-search-library/data/claude_search.db
   chromadb_path: ~/.claude-search-library/chromadb
   raw_chats_dir: ~/.claude-search-library/raw_chats
 

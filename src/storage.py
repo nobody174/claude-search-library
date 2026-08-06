@@ -37,6 +37,40 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".claude-search-library" / "data" / "claude_search.db"
+_TRUE_DEFAULT_DB_PATH = DEFAULT_DB_PATH  # see Storage.__init__ - detects test monkeypatching
+
+
+def _configured_db_path() -> Optional[str]:
+    """Read storage.db_path straight out of config.yaml (if one exists),
+    without going through src.config.load_config()'s full validation -
+    that function requires fields unrelated to the database path itself
+    (ANTHROPIC_API_KEY, GITHUB_REPO), so calling it here would make every
+    plain `Storage()` call (cli.py search/verify, server.py's routes,
+    etc.) fail outright on an otherwise-unconfigured install instead of
+    falling back to DEFAULT_DB_PATH as before.
+
+    Found by QA/Playtester (2026-08-06): every Storage() call site across
+    cli.py and server.py passed no db_path, silently hitting
+    DEFAULT_DB_PATH instead of whatever storage.db_path config.yaml
+    declared - meaning config.yaml's db_path was only ever honored by
+    `python3 -m src.storage --init`, not by day-to-day CLI/server use.
+    Returns None (falls through to DEFAULT_DB_PATH) if no config.yaml
+    exists, it fails to parse, or it doesn't declare storage.db_path -
+    this is a best-effort convenience lookup, not a hard requirement.
+    """
+    from src.config import _find_config_path, _expand_paths, _substitute_env_vars
+
+    config_path = _find_config_path()
+    if config_path is None:
+        return None
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw_config = yaml.safe_load(f) or {}
+        config = _expand_paths(_substitute_env_vars(raw_config))
+        return config.get("storage", {}).get("db_path") or None
+    except (OSError, yaml.YAMLError):
+        return None
 
 SCHEMA_VERSION = 2
 
@@ -384,7 +418,18 @@ class Storage:
     """
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or str(DEFAULT_DB_PATH)
+        # _configured_db_path() is only consulted when the caller passed
+        # no explicit db_path AND DEFAULT_DB_PATH hasn't been overridden
+        # (e.g. test suites monkeypatch DEFAULT_DB_PATH directly for
+        # isolation - identity-comparing against the true, un-monkeypatched
+        # default keeps that isolation intact instead of config.yaml
+        # silently overriding it).
+        if db_path is not None:
+            self.db_path = db_path
+        elif DEFAULT_DB_PATH != _TRUE_DEFAULT_DB_PATH:
+            self.db_path = str(DEFAULT_DB_PATH)
+        else:
+            self.db_path = _configured_db_path() or str(DEFAULT_DB_PATH)
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
 

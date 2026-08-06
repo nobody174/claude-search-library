@@ -641,3 +641,37 @@ def test_opening_a_newer_schema_database_raises(tmp_path):
     with pytest.raises(SchemaTooNewError):
         with Storage(db_path):
             pass
+
+
+def test_storage_with_no_explicit_path_honors_configured_db_path(tmp_path, monkeypatch):
+    """Regression test for a real bug QA found (2026-08-06): every
+    Storage() call in cli.py/server.py passed no db_path, so all of them
+    silently used the hardcoded DEFAULT_DB_PATH instead of whatever
+    config.yaml's storage.db_path actually declared - meaning
+    config.yaml's db_path was only ever honored by the --init CLI path,
+    not by day-to-day use. Storage() must now resolve a config.yaml in
+    cwd (if present) before falling back to DEFAULT_DB_PATH."""
+    configured_path = tmp_path / "configured" / "my_library.db"
+    config_yaml = tmp_path / "config.yaml"
+    config_yaml.write_text(
+        f"storage:\n  db_path: {configured_path.as_posix()}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    with Storage() as db:
+        assert db.db_path == str(configured_path)
+
+
+def test_storage_with_no_explicit_path_falls_back_when_no_config_yaml(tmp_path, monkeypatch):
+    """No config.yaml anywhere findable -> falls back to DEFAULT_DB_PATH
+    (here, the test-monkeypatched one) exactly as before this fix."""
+    import src.storage as storage_module
+
+    monkeypatch.chdir(tmp_path)  # no config.yaml in this empty tmp_path
+    fallback_path = tmp_path / "fallback.db"
+    monkeypatch.setattr(storage_module, "DEFAULT_DB_PATH", fallback_path)
+
+    with Storage() as db:
+        assert db.db_path == str(fallback_path)

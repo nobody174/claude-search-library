@@ -401,7 +401,19 @@ def test_try_gui_prompt_falls_back_to_terminal_on_generic_gui_crash(monkeypatch)
         raise RuntimeError("Tcl_AsyncDelete: async handler deleted by the wrong thread")
 
     fake_auth_ui.prompt_passphrase_and_totp = crashing_prompt
+
+    # Both of these are required, not redundant: `from src import auth_ui`
+    # (as _try_gui_prompt uses) resolves via the `src` package object's
+    # bound `auth_ui` attribute once real `src.auth_ui` has been imported
+    # anywhere in this process - patching only sys.modules["src.auth_ui"]
+    # is silently ignored in that case, and USE_GUI_AUTH=True would then
+    # invoke the REAL Tkinter popup instead of this fake. Discovered the
+    # hard way: an earlier version of this test that patched only
+    # sys.modules genuinely spawned a live GUI popup during a full test
+    # suite run (exactly the hazard redirect_log's docstring warns about)
+    # once another test file had already imported the real src.auth_ui.
     monkeypatch.setitem(sys.modules, "src.auth_ui", fake_auth_ui)
+    monkeypatch.setattr(sys.modules["src"], "auth_ui", fake_auth_ui, raising=False)
     monkeypatch.setattr(crypto, "USE_GUI_AUTH", True)
     monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: "fallback-passphrase")
     monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: "123456")
