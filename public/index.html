@@ -447,8 +447,28 @@
 
     function ResultCard({ result, onViewDetails }) {
       const isUnparsed = (result.tldr || "").includes(UNPARSEABLE_TLDR_MARKER);
+      // Whole card is clickable (not just the "View Details" link) - the
+      // hover:border-accent/40 affordance below already visually implied
+      // the whole card was interactive, but only the small text link
+      // actually triggered navigation, a real "control doesn't do what it
+      // implies" gap found via a Design Critic pass (2026-08-06). role
+      //="button"/tabIndex/onKeyDown keep it keyboard-operable the same
+      // way a real <button> would be, since a <div> has no native
+      // keyboard activation.
+      const openDetails = () => onViewDetails(result.session_id);
       return (
-        <div className={`result-card bg-surface rounded-lg border p-4 transition-colors ${isUnparsed ? "border-hairline opacity-60" : "border-hairline hover:border-accent/40"}`}>
+        <div
+          className={`result-card bg-surface rounded-lg border p-4 transition-colors cursor-pointer ${isUnparsed ? "border-hairline opacity-60" : "border-hairline hover:border-accent/40"}`}
+          role="button"
+          tabIndex={0}
+          onClick={openDetails}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openDetails();
+            }
+          }}
+        >
           <div className="flex items-start justify-between gap-2">
             <h3 className="font-semibold text-base">
               {isUnparsed && <span className="text-danger mr-1" title="This session failed to process and is not a real content match">⚠</span>}
@@ -473,12 +493,9 @@
           {result.top_pattern && (
             <p className="text-xs text-muted/70 mt-2 italic">"{result.top_pattern}"</p>
           )}
-          <button
-            className="mt-3 text-sm font-medium text-accent hover:underline"
-            onClick={() => onViewDetails(result.session_id)}
-          >
+          <span className="mt-3 inline-block text-sm font-medium text-accent">
             View Details →
-          </button>
+          </span>
         </div>
       );
     }
@@ -921,6 +938,19 @@
       const [reprocessMessage, setReprocessMessage] = useState(null);
 
       const handleReprocess = async (sessionIds) => {
+        // "Reprocess All" (sessionIds == null) calls the paid Claude API
+        // once per pending session with no per-click undo, unlike a
+        // single "Reprocess" which is one already-visible session - a
+        // confirm() here brings its weight in line with Sync's
+        // CredentialModal gate instead of firing on the first click with
+        // only the on-screen count as its confirmation. Found via a
+        // Design Critic pass (2026-08-06): the two flows had inconsistent
+        // confirmation weight for actions of a similar real (dollar) cost.
+        if (!sessionIds && !window.confirm(
+          `Reprocess all ${needsReview.length} pending session(s)? This calls the Claude API once per session.`
+        )) {
+          return;
+        }
         setReprocessing(sessionIds ? sessionIds[0] : "*");
         setReprocessMessage(null);
         try {
