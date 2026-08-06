@@ -153,9 +153,12 @@ curl http://localhost:7654/stats | jq
 curl http://localhost:7654/health | jq
 
 # Self-serve repair: list sessions stuck in needs_review or new, then
-# reprocess one or all of them (same code path as `cli.py process`)
+# reprocess one or all of them (same code path as `cli.py process`).
+# Reprocessing all pending sessions requires "confirm": true (real API
+# cost per session, capped at 50 sessions per call) - pass explicit
+# session_ids instead to reprocess a specific subset without confirming.
 curl http://localhost:7654/review | jq
-curl -X POST http://localhost:7654/review/reprocess -d '{}' | jq
+curl -X POST http://localhost:7654/review/reprocess -d '{"confirm": true}' | jq
 
 # Sessions related by shared tags, and API spend for a specific month/quarter
 curl http://localhost:7654/session/SESSION_ID/related | jq

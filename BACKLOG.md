@@ -21,8 +21,6 @@ what's shipped (see [CHANGELOG.md](CHANGELOG.md) for that).
   Revisit only if the *data* repo itself is ever considered for public
   release — a different, much higher-stakes decision than the code repo.
 
-## Decided, closed (continued)
-
 - **R-2/R-3 — Security Auditor pass, 2026-08-06.** R-2 (`/review/reprocess`
   unbounded cost) fixed: added `MAX_REPROCESS_PER_CALL` hard cap (50) plus
   a required `"confirm": true` whenever `session_ids` is omitted (the

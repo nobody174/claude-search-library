@@ -7,6 +7,76 @@ open see [ROADMAP.md](ROADMAP.md) (future features) and
 
 ---
 
+## 2026-08-06, continued — pre-public-release gauntlet: 7-role review, 2 real bugs found and fixed
+
+**Trigger: the user asked for a full professional-grade pre-release
+review before making the code repo public** — not a quick pass, a real
+gauntlet (Project Reviewer, Privacy/Identity Auditor, Implementer/Fixer,
+Security Auditor, QA/Playtester, Devil's Advocate, Design Critic, with
+Documentation Architect/Release Manager/Project Reviewer round 2 to
+follow), each step required to find and fix real issues before the next
+one runs.
+
+- **Real data-integrity bug found and fixed** (QA/Playtester step): every
+  `Storage()` call across `cli.py` and `server.py` passed no `db_path`,
+  so all of them silently used `src/storage.py`'s hardcoded
+  `DEFAULT_DB_PATH` instead of whatever `config.yaml`'s `storage.db_path`
+  declared — `config.yaml`'s setting was only ever honored by the
+  one-time `python3 -m src.storage --init` path. Confirmed real, not
+  theoretical: this machine had two independently populated databases —
+  `config.yaml` pointed at `library.db` (1 session, effectively
+  untouched) while `cli.py`/`server.py` had quietly been writing 129
+  real sessions into `data/claude_search.db` instead. Fixed: `Storage()`
+  now resolves `storage.db_path` from a real `config.yaml` when present
+  (with a `_TRUE_DEFAULT_DB_PATH` identity check so test suites that
+  monkeypatch `DEFAULT_DB_PATH` for isolation are unaffected).
+  `config_template.yaml`'s default now points at `data/claude_search.db`
+  (the path with real data, and the layout every other data dir already
+  uses) rather than migrating 129 sessions into the near-empty file.
+- **Real GUI-popup test hazard found and fixed** (surfaced by the same
+  investigation): a regression test added earlier this session
+  (`test_try_gui_prompt_falls_back_to_terminal_on_generic_gui_crash`,
+  from the Implementer/Fixer step's A-3 fix) only patched
+  `sys.modules["src.auth_ui"]`, not the `src` package's own bound
+  `auth_ui` attribute — `from src import auth_ui` (as `_try_gui_prompt`
+  actually uses) resolves via that attribute once the real module has
+  been imported anywhere else in the process, silently ignoring the
+  `sys.modules` patch. Confirmed this genuinely spawned a real Tkinter
+  popup during a full-suite run — a real human-entered passphrase leaked
+  into the test's assertion failure — exactly the hazard
+  `tests/test_crypto.py`'s `redirect_log` fixture exists to prevent.
+- **Security hardening** (Security Auditor step, taking R-2/R-3 as
+  required input from the earlier Project Reviewer pass): `/review/
+  reprocess` now requires `"confirm": true` whenever `session_ids` is
+  omitted (previously defaulted to reprocessing every pending session
+  with no cap — real, uncapped Claude API cost per call) plus a hard
+  `MAX_REPROCESS_PER_CALL` (50); `/import` got the same per-call session
+  cap plus a global `MAX_CONTENT_LENGTH`; `/devices` switched from
+  `SELECT *` to an explicit column allowlist. The shared static Argon2
+  salt (R-3) was reviewed and deliberately left as-is — Argon2id's own
+  cost parameters plus the random ~160-bit TOTP secret already provide
+  the real brute-force resistance, not salt secrecy.
+- **android_bridge.py hardening** (Implementer/Fixer + Devil's Advocate
+  steps): `dump_ui()` now raises `AndroidDumpFailedError` after
+  exhausting retries instead of silently returning the last failed
+  attempt's stdout as real content; `_run_adb()` now catches
+  `subprocess.TimeoutExpired`; the message-container width threshold is
+  now a screen-width fraction instead of a hardcoded 400px value;
+  `collect_from_claude_android()`'s `enumerate_conversations()` call is
+  now guarded against the same exception family `extract_conversation()`
+  already was (a gap the Devil's Advocate pass caught in the same-session
+  C-1 fix).
+- Web UI: result cards are now clickable as a whole (previously only the
+  small "View Details" text link worked, despite a hover state implying
+  the whole card was interactive); "Reprocess All" now confirms before
+  running, matching the confirmation weight Sync's push/pull/
+  bidirectional buttons already had (Design Critic step).
+- 361 tests passing throughout (up from 352 at the start of this
+  session), all fixes verified against the real archive
+  (`cli.py verify` confirmed HEALTHY, 129 sessions, after the db_path fix).
+
+---
+
 ## 2026-08-06, continued — mobile TOTP re-provisioning shipped
 
 **Trigger: real friction the Android/TOTP work made obvious** — setting
