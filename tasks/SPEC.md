@@ -972,10 +972,10 @@ GITHUB_REPO=github.com/nobody174/claude-search-library
 # macOS/Linux: crontab -e
 
 # Collect new chats daily at 2 AM
-0 2 * * * /home/vartdalffs/claude-search-library/venv/bin/python3 /home/vartdalffs/claude-search-library/cli.py collect --batch
+0 2 * * * /home/nobody174/claude-search-library/venv/bin/python3 /home/nobody174/claude-search-library/cli.py collect --batch
 
 # Process summaries daily at 3 AM
-0 3 * * * /home/vartdalffs/claude-search-library/venv/bin/python3 /home/vartdalffs/claude-search-library/cli.py process --batch-size 10
+0 3 * * * /home/nobody174/claude-search-library/venv/bin/python3 /home/nobody174/claude-search-library/cli.py process --batch-size 10
 
 # Sync to GitHub every 5 min (already running as daemon)
 ```

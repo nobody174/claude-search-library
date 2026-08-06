@@ -99,7 +99,7 @@ def test_parse_conversation_list_against_real_sidebar_dump():
 
     titles = [c["title"] for c in convos]
     assert "CRL Android bridge verification testing" in titles
-    assert "Plan for Pi-Menu public project !" in titles
+    assert "Sample chat title one" in titles
     assert len(convos) == 10
 
 
