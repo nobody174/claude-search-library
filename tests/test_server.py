@@ -646,6 +646,19 @@ def test_import_endpoint_rejects_non_object_items(client, import_dir):
     assert resp.status_code == 400
 
 
+def test_import_endpoint_rejects_more_than_max_sessions_per_call(client, import_dir):
+    import server
+
+    too_many = [{"id": str(i)} for i in range(server.MAX_IMPORT_SESSIONS_PER_CALL + 1)]
+    resp = client.post(
+        "/import",
+        data=json.dumps({"sessions": too_many}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    assert "limit" in resp.get_json()["error"]
+
+
 def test_import_endpoint_writes_files_to_claude_ai_export_dir(client, import_dir):
     resp = client.post(
         "/import",
@@ -703,6 +716,50 @@ def test_import_export_endpoint_rejects_bad_zip(client, import_dir):
     data = {"file": (io.BytesIO(b"not a real zip"), "export.zip")}
     resp = client.post("/import-export", data=data, content_type="multipart/form-data")
     assert resp.status_code == 400
+
+
+def test_reprocess_endpoint_requires_confirm_when_session_ids_omitted(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with Storage() as db:
+        db.insert_session(_session("s1", status="needs_review"))
+
+    resp = client.post("/review/reprocess", data=json.dumps({}), content_type="application/json")
+
+    assert resp.status_code == 400
+    assert "confirm" in resp.get_json()["error"]
+
+
+def test_reprocess_endpoint_explicit_session_ids_does_not_require_confirm(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(
+        "src.processor.process_batch",
+        lambda targets, api_key, batch_size: {"succeeded": targets, "failed": [], "needs_review": []},
+    )
+    with Storage() as db:
+        db.insert_session(_session("s1", status="needs_review"))
+
+    resp = client.post(
+        "/review/reprocess",
+        data=json.dumps({"session_ids": ["s1"]}),
+        content_type="application/json",
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["succeeded"] == ["s1"]
+
+
+def test_reprocess_endpoint_rejects_more_than_max_per_call(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    too_many = [f"s{i}" for i in range(server.MAX_REPROCESS_PER_CALL + 1)]
+    resp = client.post(
+        "/review/reprocess",
+        data=json.dumps({"session_ids": too_many}),
+        content_type="application/json",
+    )
+
+    assert resp.status_code == 400
+    assert "limit" in resp.get_json()["error"]
 
 
 def test_costs_endpoint_returns_report(client):

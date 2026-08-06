@@ -211,9 +211,15 @@ async function getNeedsReview() {
 
 /** Re-run summarization + indexing for failed sessions. Omit sessionIds to reprocess all needs_review sessions. */
 async function reprocessReview(sessionIds) {
+  // Server requires "confirm": true whenever session_ids is omitted (see
+  // server.py's reprocess_review_endpoint docstring, R-2) - the "Reprocess
+  // All" button that drives this path already shows the pending count on
+  // screen before it's clickable, so that's the confirmation.
   return request("/review/reprocess", {
     method: "POST",
-    body: JSON.stringify(sessionIds && sessionIds.length ? { session_ids: sessionIds } : {}),
+    body: JSON.stringify(
+      sessionIds && sessionIds.length ? { session_ids: sessionIds } : { confirm: true }
+    ),
   });
 }
 

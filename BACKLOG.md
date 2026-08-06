@@ -21,25 +21,25 @@ what's shipped (see [CHANGELOG.md](CHANGELOG.md) for that).
   Revisit only if the *data* repo itself is ever considered for public
   release — a different, much higher-stakes decision than the code repo.
 
-## Awaiting the Security Auditor step (pre-release gauntlet, 2026-08-06)
+## Decided, closed (continued)
 
-Project Reviewer explicitly recommended taking these two as primary input
-for the dedicated Security Auditor pass rather than fixing them blind
-during the Implementer/Fixer step — both are security-posture decisions,
-not simple bugs.
-
-- **R-2: `/review/reprocess` (server.py:634) has no per-call cost cap.**
-  Defaults to reprocessing EVERY pending/needs_review session if no
-  `session_ids` given — real accidental-cost risk (each session costs real
-  Claude API spend) for any authenticated caller. No dollar/session-count
-  ceiling, dry-run flag, or confirmation step exists today.
-
-- **R-3: shared static Argon2 salt** (`ARGON2_SALT` in crypto.py) is a
-  deliberate design choice for deterministic cross-device key derivation
-  — but going public means every installation shares the same salt, so a
-  single precomputed attack investment amortizes across all public users,
-  not just one target. Not discussed anywhere in CLAUDE.md's Security
-  section.
+- **R-2/R-3 — Security Auditor pass, 2026-08-06.** R-2 (`/review/reprocess`
+  unbounded cost) fixed: added `MAX_REPROCESS_PER_CALL` hard cap (50) plus
+  a required `"confirm": true` whenever `session_ids` is omitted (the
+  actually dangerous "reprocess everything" default), paired with the
+  same treatment for `/import`'s session-count (`MAX_IMPORT_SESSIONS_PER_
+  CALL`) and a global `MAX_CONTENT_LENGTH`. R-3 (shared static Argon2
+  salt) reviewed and left as-is: Argon2id's own cost parameters
+  (`time_cost=3, memory_cost=64MiB, parallelism=4`) make precomputation
+  economically similar to a per-target attack regardless of salt sharing,
+  and the derived key additionally depends on a random ~160-bit TOTP
+  secret with no feasible precomputed table against it — brute-force
+  resistance was never resting on salt secrecy. Also fixed in the same
+  pass: `/devices` switched from `SELECT *` to an explicit column
+  allowlist so future schema columns aren't auto-exposed, and the
+  IP-keyed `/setup` lockout got a comment documenting it breaks (global
+  lockout, not per-user) if this server is ever put behind a reverse
+  proxy without trusted-proxy header handling.
 
 ## Known, low-severity, not currently worth fixing
 

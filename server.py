@@ -37,6 +37,24 @@ SRC_DIR = Path(__file__).resolve().parent / "src"
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = Flask(__name__)
+# Caps the size of any single request body (all routes, e.g. /import,
+# /import-export's uploaded file). Unset (unbounded) by default in
+# Flask - flagged by a Security Auditor pass (2026-08-06): an
+# authenticated LAN caller, or a buggy client retry loop, could
+# otherwise exhaust disk/memory with one oversized POST. 100 MB comfortably
+# covers a real claude.ai data export ZIP (~10 MB/year per CLAUDE.md).
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+
+# Per-call cap for /import's 'sessions' list, alongside MAX_CONTENT_LENGTH
+# above - same Security Auditor finding (2026-08-06): bounds the number of
+# files written to disk per request, not just total request byte size.
+MAX_IMPORT_SESSIONS_PER_CALL = 500
+
+# Per-call cap for /review/reprocess - Security Auditor finding
+# (2026-08-06, R-2): bounds real per-session API spend triggered by one
+# request. Paired with the "confirm" requirement on that endpoint's
+# "reprocess all pending" path (see its docstring).
+MAX_REPROCESS_PER_CALL = 50
 # The web UI (public/index.html, src/api.js) only ever makes same-origin
 # requests - CORS doesn't apply to those at all, so this allowlist was
 # dead configuration for the app's actual usage: it doesn't match the
@@ -150,6 +168,14 @@ def _invalidate_session(token: Optional[str]) -> None:
 SETUP_MAX_ATTEMPTS = 10
 SETUP_LOCKOUT_SECONDS = 5 * 60
 _setup_attempts: dict[str, list] = {}  # ip -> [timestamp, ...] of recent failures
+# Keyed on request.remote_addr, which assumes a direct connection (the
+# documented LAN/phone-over-WiFi deployment in CLAUDE.md). Security
+# Auditor finding (2026-08-06): if this server is ever put behind a
+# reverse proxy (nginx, Cloudflare Tunnel) for remote access, every
+# request collapses to the proxy's single IP, turning per-IP lockout
+# into a global lockout - one mistyped passphrase locks out every user.
+# Do not reverse-proxy this without adding trusted-proxy header handling
+# (e.g. werkzeug's ProxyFix) first.
 
 
 def _setup_locked_out(ip: str) -> bool:
@@ -479,6 +505,11 @@ def import_endpoint():
     sessions = body.get("sessions")
     if not sessions or not isinstance(sessions, list):
         return jsonify({"error": "'sessions' must be a non-empty list of export objects"}), 400
+    if len(sessions) > MAX_IMPORT_SESSIONS_PER_CALL:
+        return jsonify({
+            "error": f"'sessions' exceeds the {MAX_IMPORT_SESSIONS_PER_CALL}-item limit per call "
+                     f"({len(sessions)} given) - split into multiple requests"
+        }), 400
 
     export_dir = RAW_EXPORTS_CLAUDE_AI_DIR
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -552,7 +583,17 @@ def costs_endpoint():
 @app.route("/devices", methods=["GET"])
 def devices_endpoint():
     with Storage() as db:
-        rows = db.conn.execute("SELECT * FROM sync_metadata").fetchall()
+        # Explicit column allowlist (not SELECT *) - Security Auditor
+        # finding (2026-08-06): SELECT * silently re-exposes any future
+        # column added to sync_metadata to every authenticated caller of
+        # this endpoint, with nobody having to remember to update this
+        # query when the schema changes. Today's columns are all benign
+        # sync bookkeeping, but this is a deliberate ceiling, not an
+        # accident of what happens to exist right now.
+        rows = db.conn.execute(
+            "SELECT device_id, device_name, last_sync_at, last_heartbeat, "
+            "pending_changes, is_hub FROM sync_metadata"
+        ).fetchall()
     return jsonify({"devices": [dict(r) for r in rows]})
 
 
@@ -633,10 +674,21 @@ def list_needs_review_endpoint():
 
 @app.route("/review/reprocess", methods=["POST"])
 def reprocess_review_endpoint():
-    """POST /review/reprocess {"session_ids": [...]} (omit/empty for "all
-    pending" - needs_review + new) — re-runs summarization + indexing,
-    same code path as `cli.py process`. Costs real API spend per session,
-    same as any other summarization."""
+    """POST /review/reprocess {"session_ids": [...], "confirm": bool}
+    (omit/empty session_ids for "all pending" - needs_review + new) —
+    re-runs summarization + indexing, same code path as `cli.py process`.
+    Costs real API spend per session, same as any other summarization.
+
+    Security Auditor finding (2026-08-06, R-2): omitting session_ids
+    defaults to reprocessing EVERY pending session with no cap, dry-run,
+    or confirmation - a real accidental-cost risk (an authenticated
+    caller doesn't necessarily know how many sessions are pending before
+    calling this). Two guards, not a dry-run mode: a hard per-call cap
+    on the resolved target count (explicit lists included - a caller
+    can always split into multiple requests), and a required "confirm":
+    true whenever session_ids is omitted (the actually dangerous open-
+    ended case), which a UI can set only after showing the caller a
+    count fetched from GET /review first."""
     import os
 
     from src.processor import process_batch
@@ -652,12 +704,27 @@ def reprocess_review_endpoint():
         if session_ids:
             targets = session_ids
         else:
+            if not body.get("confirm"):
+                return jsonify({
+                    "error": "reprocessing all pending sessions requires "
+                             "'confirm': true in the request body (omitting "
+                             "session_ids reprocesses every pending session, "
+                             "with real API cost per session) - check GET "
+                             "/review first to see how many that is"
+                }), 400
             targets = [
                 s["id"] for s in db.get_all_sessions() if s.get("status") in PENDING_STATUSES
             ]
 
     if not targets:
         return jsonify({"succeeded": [], "failed": [], "needs_review": []})
+
+    if len(targets) > MAX_REPROCESS_PER_CALL:
+        return jsonify({
+            "error": f"{len(targets)} sessions requested exceeds the "
+                     f"{MAX_REPROCESS_PER_CALL}-per-call limit - split into "
+                     "multiple requests with explicit session_ids"
+        }), 400
 
     result = process_batch(targets, api_key=api_key, batch_size=len(targets))
 
