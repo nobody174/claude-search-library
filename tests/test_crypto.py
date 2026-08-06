@@ -306,6 +306,76 @@ def test_join_device_existing_setup_rejects_bad_totp(monkeypatch):
         crypto.join_device_existing_setup()
 
 
+def test_show_totp_qr_again_displays_qr_with_valid_credentials(monkeypatch):
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: passphrase)
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: pyotp.TOTP(fixed_secret).now())
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+
+    displayed_uris = []
+    monkeypatch.setattr(crypto, "display_qr_code", lambda uri: displayed_uris.append(uri))
+
+    crypto.show_totp_qr_again()
+
+    assert len(displayed_uris) == 1
+    assert fixed_secret in displayed_uris[0]  # the URI encodes the real secret
+
+
+def test_show_totp_qr_again_rejects_wrong_passphrase(monkeypatch):
+    fixed_secret = pyotp.random_base32()
+    correct_key = crypto._derive_passphrase_only_key("correct-passphrase")
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), correct_key)
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: "wrong-passphrase")
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: pyotp.TOTP(fixed_secret).now())
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+    monkeypatch.setattr(crypto, "display_qr_code", lambda uri: pytest.fail("QR must not display on wrong passphrase"))
+
+    with pytest.raises(ValueError):
+        crypto.show_totp_qr_again()
+
+
+def test_show_totp_qr_again_rejects_wrong_totp_code(monkeypatch):
+    """Real security requirement (see ROADMAP.md): the passphrase alone
+    must not be enough - a currently-valid TOTP code (proof you already
+    have a working Authenticator instance) is also required."""
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: passphrase)
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: "000000")
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+    monkeypatch.setattr(crypto, "display_qr_code", lambda uri: pytest.fail("QR must not display on wrong TOTP code"))
+
+    with pytest.raises(ValueError):
+        crypto.show_totp_qr_again()
+
+
+def test_show_totp_qr_again_does_not_write_session_cache(monkeypatch):
+    """Real distinction from join_device_existing_setup(): this is a
+    one-off display action, not a login - it must not leave a cached
+    session behind."""
+    fixed_secret = pyotp.random_base32()
+    passphrase = "test-passphrase"
+    passphrase_key = crypto._derive_passphrase_only_key(passphrase)
+    encrypted_totp = crypto.encrypt_data(fixed_secret.encode("utf-8"), passphrase_key)
+
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: passphrase)
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: pyotp.TOTP(fixed_secret).now())
+    monkeypatch.setattr(crypto, "_fetch_secrets_from_github", lambda: encrypted_totp)
+    monkeypatch.setattr(crypto, "display_qr_code", lambda uri: None)
+
+    crypto.show_totp_qr_again()
+
+    assert not crypto.SESSION_CACHE_PATH.exists()
+
+
 def test_setup_and_join_produce_matching_keys(monkeypatch):
     """End-to-end: a device that sets up and a device that joins must derive
     the same encryption key, given the same passphrase."""

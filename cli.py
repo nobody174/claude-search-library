@@ -140,6 +140,25 @@ def android_connect(address: str) -> None:
     click.echo(f"Connected: {device} (remembered for future collect --source claude-android runs)")
 
 
+@cli.command(name="show-totp-qr")
+def show_totp_qr() -> None:
+    """Re-display the TOTP enrollment QR code, to add a replacement or
+    second phone's Authenticator app to the same secret already in use.
+
+    Requires proving you already have access (passphrase + a currently-
+    valid TOTP code from an already-enrolled device) - this is not the
+    first-time setup flow. If you don't have a working Authenticator
+    instance at all (e.g. your only phone with it installed is gone),
+    use `python3 -m src.crypto --join-device` on a fresh device instead.
+    """
+    from src.crypto import show_totp_qr_again
+
+    try:
+        show_totp_qr_again()
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
 @cli.command(name="import-export")
 @click.argument("export_path", type=click.Path(exists=True))
 @click.option(

@@ -399,6 +399,47 @@ def _clear_session_cache() -> None:
         pass
 
 
+def show_totp_qr_again() -> None:
+    """Re-display the existing TOTP enrollment QR code, for adding a new
+    Authenticator app instance (a replacement phone, a second phone) to
+    the same already-set-up TOTP secret - without redoing the full
+    join_device_existing_setup() flow.
+
+    Security model (see ROADMAP.md's mobile TOTP re-provisioning entry):
+    re-displaying an existing secret is a materially different action
+    from generating a new one during initial setup, so it demands the
+    same proof-of-access join_device_existing_setup() already requires -
+    passphrase AND a currently-valid TOTP code - rather than being
+    reachable with just the passphrase. The TOTP code must come from a
+    device that's ALREADY enrolled (this function doesn't help you get
+    that first code - it's for adding an Nth device once you already
+    have at least one working Authenticator instance to prove access
+    with). No session cache is written here (unlike
+    join_device_existing_setup()) - this is a one-off display action,
+    not a login, and doesn't derive/need the encryption key at all.
+    """
+    _setup_file_logging()
+
+    passphrase, totp_code = _prompt_passphrase_and_totp_combined("Re-display TOTP QR Code")
+
+    encrypted_totp = _fetch_secrets_from_github()
+    passphrase_key = _derive_passphrase_only_key(passphrase)
+    try:
+        totp_secret = decrypt_data(encrypted_totp, passphrase_key).decode("utf-8")
+    except InvalidToken as e:
+        logger.warning("show_totp_qr_again: decrypt failed: %s", e)
+        raise ValueError("Failed to decrypt TOTP secret — check your passphrase") from e
+
+    if not verify_totp_code(totp_secret, totp_code):
+        logger.warning("show_totp_qr_again: TOTP verification failed")
+        raise ValueError("Invalid TOTP code — scan the QR with an already-enrolled device first if you don't have a working code")
+
+    uri = build_totp_uri(totp_secret)
+    print("Scan this QR code into a new Google Authenticator instance:")
+    display_qr_code(uri)
+    logger.info("show_totp_qr_again: QR re-displayed after successful verification")
+
+
 def join_device_existing_setup() -> dict:
     """Join-device flow: fetch + decrypt the existing TOTP secret, verify, derive the key.
 
