@@ -675,3 +675,46 @@ def test_storage_with_no_explicit_path_falls_back_when_no_config_yaml(tmp_path, 
 
     with Storage() as db:
         assert db.db_path == str(fallback_path)
+
+
+def test_storage_with_malformed_config_yaml_falls_back_instead_of_crashing(tmp_path, monkeypatch):
+    """Regression test for a Devil's Advocate finding (2026-08-06): a
+    syntactically-valid YAML file whose top level isn't a mapping (e.g.
+    a bare list) previously made _configured_db_path() crash with
+    AttributeError instead of falling back to DEFAULT_DB_PATH like every
+    other malformed-config case - a total Storage() crash, worse than
+    the original silent-wrong-database bug this whole fix targets."""
+    import src.storage as storage_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("- just\n- a\n- list\n", encoding="utf-8")
+    fallback_path = tmp_path / "fallback.db"
+    monkeypatch.setattr(storage_module, "DEFAULT_DB_PATH", fallback_path)
+
+    with Storage() as db:
+        assert db.db_path == str(fallback_path)
+
+
+def test_configured_db_path_honors_db_path_env_var(tmp_path, monkeypatch):
+    """Regression test for a Devil's Advocate finding (2026-08-06):
+    _configured_db_path() read config.yaml directly but never applied
+    the DB_PATH env-var override that src.config.load_config() honors
+    elsewhere - same bug class the fix was written to close, reintroduced
+    for the env-var path. DB_PATH must win even when a config.yaml with a
+    different db_path also exists.
+
+    Calls _configured_db_path() directly (not via Storage()) since
+    DEFAULT_DB_PATH can't be monkeypatched here without Storage.__init__
+    treating that as test-isolation mode and skipping config resolution
+    entirely (see its docstring) - this test is specifically about
+    _configured_db_path()'s own env-var precedence, not that guard."""
+    from src.storage import _configured_db_path
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        "storage:\n  db_path: /should/not/be/used.db\n", encoding="utf-8"
+    )
+    env_path = tmp_path / "from_env.db"
+    monkeypatch.setenv("DB_PATH", str(env_path))
+
+    assert _configured_db_path() == str(env_path)

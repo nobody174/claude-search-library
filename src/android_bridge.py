@@ -683,7 +683,22 @@ def collect_from_claude_android(address: Optional[str] = None) -> list[dict]:
         return []
 
     launch_claude_app(device)
-    conversations = enumerate_conversations(device)
+    # enumerate_conversations() itself calls dump_ui() repeatedly while
+    # scrolling the sidebar - a mid-run dump failure there (device losing
+    # WiFi, screen locking) can now raise AndroidDumpFailedError (this
+    # session's C-1 fix), which used to be impossible when dump_ui()
+    # silently returned bad content instead. Caught here so a failure
+    # mid-enumeration degrades the same way a failed initial connect
+    # already does (skip Android collection, not crash the whole
+    # collection run) - found by Devil's Advocate pass, 2026-08-06:
+    # this call was unguarded even though extract_conversation() below
+    # already has its own per-conversation try/except for the same
+    # exception family.
+    try:
+        conversations = enumerate_conversations(device)
+    except AndroidUIElementNotFoundError as e:
+        logger.warning("Failed to enumerate Android conversations; skipping claude-android collection: %s", e)
+        return []
 
     sessions = []
     for conv in conversations:

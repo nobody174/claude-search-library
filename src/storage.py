@@ -58,6 +58,15 @@ def _configured_db_path() -> Optional[str]:
     exists, it fails to parse, or it doesn't declare storage.db_path -
     this is a best-effort convenience lookup, not a hard requirement.
     """
+    import os
+
+    # DB_PATH env var takes the same priority it has in
+    # src.config.load_config() (via ENV_OVERRIDES) - checked first so a
+    # deliberate env override isn't silently ignored just because this
+    # function bypasses load_config()'s full validation.
+    if "DB_PATH" in os.environ:
+        return os.environ["DB_PATH"]
+
     from src.config import _find_config_path, _expand_paths, _substitute_env_vars
 
     config_path = _find_config_path()
@@ -67,6 +76,14 @@ def _configured_db_path() -> Optional[str]:
         import yaml
         with open(config_path, "r", encoding="utf-8") as f:
             raw_config = yaml.safe_load(f) or {}
+        # A syntactically-valid YAML file whose top level isn't a mapping
+        # (e.g. a bare list, a string) - _expand_paths()/.get() below
+        # would otherwise raise AttributeError, crashing every Storage()
+        # call outright instead of falling back to DEFAULT_DB_PATH like
+        # every other malformed-config case here (Devil's Advocate pass,
+        # 2026-08-06).
+        if not isinstance(raw_config, dict):
+            return None
         config = _expand_paths(_substitute_env_vars(raw_config))
         return config.get("storage", {}).get("db_path") or None
     except (OSError, yaml.YAMLError):
