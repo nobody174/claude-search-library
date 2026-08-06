@@ -90,8 +90,10 @@ def query_command(query: str) -> None:
 @click.option(
     "--source", "sources",
     multiple=True,
-    type=click.Choice(["claude-ai", "vscode", "claude-code", "claude-desktop", "cowork", "local"]),
-    help="Collect from only this source (repeatable). Default: all sources.",
+    type=click.Choice(["claude-ai", "vscode", "claude-code", "claude-desktop", "cowork", "local", "claude-android"]),
+    help="Collect from only this source (repeatable). Default: all sources except "
+         "claude-android, which is real device time and must be requested explicitly "
+         "(see `cli.py android-connect`).",
 )
 @click.option(
     "--fail-fast", is_flag=True,
@@ -117,6 +119,25 @@ def collect(watch: bool, dry_run: bool, sources: tuple, fail_fast: bool) -> None
     else:
         result = run_collection(sources=source_list, fail_fast=fail_fast)
         click.echo(json.dumps(result, indent=2))
+
+
+@cli.command(name="android-connect")
+@click.argument("address")
+def android_connect(address: str) -> None:
+    """Connect to an Android device over ADB WiFi and remember it for
+    future `collect --source claude-android` runs.
+
+    ADDRESS is <phone-ip>:<port>, found on the phone under
+    Settings -> Developer options -> Wireless debugging. Works for your
+    own Android phone, or a spare/old Android device used purely to
+    read conversations synced from another account device (including an
+    iPhone - claude.ai conversations sync across every mobile client on
+    the same account, see CHANGELOG.md's 2026-08-06 entries).
+    """
+    from src.android_bridge import connect_device
+
+    device = connect_device(address)
+    click.echo(f"Connected: {device} (remembered for future collect --source claude-android runs)")
 
 
 @cli.command(name="import-export")

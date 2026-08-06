@@ -31,7 +31,17 @@ from src import collector
 
 logger = logging.getLogger(__name__)
 
+# claude-android is deliberately NOT in SOURCES (the default "collect
+# from everything" set `cli.py sync` and `run_collection(sources=None)`
+# use) - unlike every other collector, it drives a live device UI over
+# several minutes per run (real device time, see
+# src/android_bridge.py's module docstring) and depends on a phone
+# being reachable over WiFi right now. Running that silently on every
+# 5-minute sync tick would be a real surprise, not a convenience.
+# Explicitly selectable via `cli.py collect --source claude-android`
+# instead - see ALL_SOURCES for the full set including it.
 SOURCES = ("claude-ai", "vscode", "claude-code", "claude-desktop", "cowork", "local")
+ALL_SOURCES = SOURCES + ("claude-android",)
 
 
 class CollectionError(RuntimeError):
@@ -47,6 +57,9 @@ def _default_folders() -> dict:
 
 
 def _collector_and_arg(source: str, folders: dict):
+    if source == "claude-android":
+        from src.android_bridge import collect_from_claude_android
+        return (collect_from_claude_android, folders.get("claude-android"))
     return {
         "claude-ai": (collector.collect_from_claude_ai, folders.get("claude-ai")),
         "vscode": (collector.collect_from_vscode, folders.get("vscode")),
@@ -67,23 +80,30 @@ def run_collection(
     claude_desktop_indexeddb_root: Optional[str] = None,
     cowork_path: Optional[str] = None,
     local_folder: Optional[str] = None,
+    android_address: Optional[str] = None,
 ) -> dict:
-    """Run the requested collectors (default: all four sources) and persist
-    new sessions to storage.
+    """Run the requested collectors (default: all sources except
+    claude-android - see SOURCES/ALL_SOURCES) and persist new sessions
+    to storage.
 
     Returns a dict with per-source results plus aggregate totals:
     {"new": int, "errors": int, "total": int, "sources": {name: {...}}}.
 
     In fail_fast mode, the first collector or storage failure raises
     CollectionError immediately instead of being recorded and skipped.
+
+    android_address defaults to None, meaning collect_from_claude_android()
+    falls back to its own persisted last-known device address (see
+    src/android_bridge.py's connect_device()) - only needed here if you
+    want to override that for a one-off run.
     """
     from src.storage import Storage
 
     if sources is None:
         sources = list(SOURCES)
-    unknown = [s for s in sources if s not in SOURCES]
+    unknown = [s for s in sources if s not in ALL_SOURCES]
     if unknown:
-        raise ValueError(f"Unknown source(s): {unknown}. Valid sources: {SOURCES}")
+        raise ValueError(f"Unknown source(s): {unknown}. Valid sources: {ALL_SOURCES}")
 
     defaults = _default_folders()
     folders = {
@@ -93,6 +113,7 @@ def run_collection(
         "claude-desktop": claude_desktop_indexeddb_root,
         "cowork": cowork_path,
         "local": local_folder or defaults["local"],
+        "claude-android": android_address,
     }
 
     per_source: dict = {}
