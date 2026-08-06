@@ -5,7 +5,7 @@
 Collect Claude chats from all your devices. Summarize with AI. Search semantically. Sync encrypted to GitHub. Works offline.
 
 ![Status Badge](https://img.shields.io/badge/status-production-green)
-![Tests](https://img.shields.io/badge/tests-348%20passing-brightgreen)
+[![Tests](https://github.com/nobody174/claude-search-library/actions/workflows/tests.yml/badge.svg)](https://github.com/nobody174/claude-search-library/actions/workflows/tests.yml)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ## What Is This?
@@ -22,7 +22,7 @@ You use Claude across multiple machines (desktop, laptop, phone, tablet). Your c
 - 📱 **Access** — Search from desktop, laptop, phone (React web UI)
 - 🔌 **Offline** — Works completely offline, syncs when internet returns
 - 🩺 **Self-healing** — Web UI surfaces archive health directly and can repair/reprocess failed or pending sessions with one click, no CLI needed
-- ✅ **Test** — 348 Python + 10 Node tests, production-ready
+- ✅ **Test** — 361 Python tests (pytest), production-ready
 
 ## Quick Start
 
@@ -261,7 +261,7 @@ claude-search-library/
 ├── server.py             # Flask REST API
 ├── config_template.yaml  # Copy to config.yaml and fill in
 ├── requirements.txt
-└── tests/                 # 348 Python tests (pytest) + 10 Node tests (api.js)
+└── tests/                 # 361 Python tests (pytest)
 ```
 
 ## Documentation
