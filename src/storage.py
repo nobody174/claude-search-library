@@ -10,10 +10,16 @@
 """Storage module for Claude Search Library.
 
 SQLite persistence for sessions, summaries, search index, redaction log,
-and sync metadata. Optionally loads the cr-sqlite extension for CRDT-based
-multi-device merge support (see CLAUDE.md -> Known Blockers: cr-sqlite
-Python bindings are not yet reliably available on all platforms, so this
-degrades gracefully to plain SQLite when the extension can't be loaded).
+and sync metadata. Loads the cr-sqlite extension (vendored binary, see
+vendor/cr-sqlite/) for real CRDT-based multi-device merge support -
+this is the normal path on a supported platform (Windows x86_64 today;
+see CHANGELOG.md's 2026-08-05 cr-sqlite integration entry). If the
+vendored binary is missing or wrong for the current platform/arch,
+_try_load_cr_sqlite() degrades gracefully to plain SQLite instead of
+failing outright - `sessions`/`summaries` just stay ordinary tables,
+not real CRR tables, so cross-device merges fall back to whatever the
+caller (sync.py) does for a non-CRDT database rather than true
+per-column merge.
 """
 from __future__ import annotations
 

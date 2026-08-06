@@ -189,6 +189,44 @@ def _prompt_totp_code(prompt: str = "Enter code from Authenticator: ") -> str:
     return input(prompt)
 
 
+def _try_gui_prompt(gui_call):
+    """Shared "import auth_ui, run one GUI prompt call, fall back to None
+    on any failure" wrapper for the three *_gui_aware prompt functions
+    below - they previously each duplicated this exact import+fallback
+    shape independently (found via a Project Reviewer pass, 2026-08-06),
+    with one real inconsistency between copies: only two of the three
+    caught a generic Exception from the GUI call itself (a real popup
+    crash, not just an import failure) and fell back to terminal;
+    _prompt_passphrase_and_totp_combined's copy only caught
+    AuthCancelled, so a genuine Tkinter crash there would have propagated
+    unhandled instead of falling back like the other two paths do. Fixed
+    by having all three go through this one implementation.
+
+    gui_call is a zero-arg callable that does the actual auth_ui.prompt_*
+    call and returns its result — called only if USE_GUI_AUTH is on and
+    the import succeeds. Returns None (not a raised exception) for every
+    failure mode except AuthCancelled, which always propagates as
+    ValueError("Authentication was cancelled") regardless of GUI
+    availability, since a user-initiated cancel should abort the whole
+    operation, not silently fall through to a terminal prompt they never
+    asked for.
+    """
+    if not USE_GUI_AUTH:
+        return None
+    try:
+        from src import auth_ui
+    except Exception as e:
+        logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
+        return None
+    try:
+        return gui_call(auth_ui)
+    except auth_ui.AuthCancelled:
+        raise ValueError("Authentication was cancelled")
+    except Exception as e:
+        logger.warning("GUI auth popup failed, falling back to terminal: %r", e)
+        return None
+
+
 def _prompt_passphrase_and_totp_combined(gui_title: str) -> tuple:
     """Prompt for passphrase + TOTP code together in one step.
 
@@ -203,17 +241,9 @@ def _prompt_passphrase_and_totp_combined(gui_title: str) -> tuple:
     Tkinter import failure, etc.) — the fallback is silent so headless/SSH
     use isn't interrupted by a GUI that can't render.
     """
-    if USE_GUI_AUTH:
-        try:
-            from src import auth_ui
-        except Exception as e:
-            logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
-        else:
-            try:
-                result = auth_ui.prompt_passphrase_and_totp(title=gui_title)
-                return result["passphrase"], result["totp_code"]
-            except auth_ui.AuthCancelled:
-                raise ValueError("Authentication was cancelled")
+    result = _try_gui_prompt(lambda auth_ui: auth_ui.prompt_passphrase_and_totp(title=gui_title))
+    if result is not None:
+        return result["passphrase"], result["totp_code"]
 
     passphrase = _prompt_passphrase()
     code = _prompt_totp_code()
@@ -229,20 +259,8 @@ def _prompt_passphrase_gui_aware(gui_title: str = "Enter Master Passphrase") -> 
     single combined popup with the TOTP step the way setup_device_first_time
     does. Mirrors _prompt_totp_only_gui_aware's structure and logging.
     """
-    if USE_GUI_AUTH:
-        try:
-            from src import auth_ui
-        except Exception as e:
-            logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
-        else:
-            try:
-                return auth_ui.prompt_passphrase_only(title=gui_title)
-            except auth_ui.AuthCancelled:
-                raise ValueError("Authentication was cancelled")
-            except Exception as e:
-                logger.warning("GUI auth popup failed, falling back to terminal: %r", e)
-
-    return _prompt_passphrase()
+    result = _try_gui_prompt(lambda auth_ui: auth_ui.prompt_passphrase_only(title=gui_title))
+    return result if result is not None else _prompt_passphrase()
 
 
 def _prompt_totp_only_gui_aware(gui_title: str = "Confirm Authenticator Code") -> str:
@@ -254,20 +272,8 @@ def _prompt_totp_only_gui_aware(gui_title: str = "Confirm Authenticator Code") -
     combined popup with the passphrase step the way setup_device_first_time
     does.
     """
-    if USE_GUI_AUTH:
-        try:
-            from src import auth_ui
-        except Exception as e:
-            logger.warning("GUI auth unavailable, falling back to terminal: %s", e)
-        else:
-            try:
-                return auth_ui.prompt_totp_only(title=gui_title)
-            except auth_ui.AuthCancelled:
-                raise ValueError("Authentication was cancelled")
-            except Exception as e:
-                logger.warning("GUI auth popup failed, falling back to terminal: %r", e)
-
-    return _prompt_totp_code()
+    result = _try_gui_prompt(lambda auth_ui: auth_ui.prompt_totp_only(title=gui_title))
+    return result if result is not None else _prompt_totp_code()
 
 
 def _push_secrets_to_github(encrypted_totp: str) -> None:

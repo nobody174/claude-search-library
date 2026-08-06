@@ -376,6 +376,42 @@ def test_show_totp_qr_again_does_not_write_session_cache(monkeypatch):
     assert not crypto.SESSION_CACHE_PATH.exists()
 
 
+def test_try_gui_prompt_falls_back_to_terminal_on_generic_gui_crash(monkeypatch):
+    """Regression test for a real inconsistency a Project Reviewer pass
+    found (2026-08-06): before _try_gui_prompt() was factored out, only
+    2 of the 3 GUI-prompt call sites caught a generic Exception from the
+    GUI call itself (not just an import failure) and fell back to
+    terminal - _prompt_passphrase_and_totp_combined's copy only caught
+    AuthCancelled, so a genuine Tkinter crash there would have propagated
+    unhandled instead of degrading gracefully like the other two paths.
+    All three now go through one shared implementation - this proves the
+    fallback actually works for a real (simulated) GUI crash, not just
+    an import failure."""
+    import sys
+    import types
+
+    fake_auth_ui = types.ModuleType("auth_ui")
+
+    class AuthCancelled(Exception):
+        pass
+
+    fake_auth_ui.AuthCancelled = AuthCancelled
+
+    def crashing_prompt(title=None):
+        raise RuntimeError("Tcl_AsyncDelete: async handler deleted by the wrong thread")
+
+    fake_auth_ui.prompt_passphrase_and_totp = crashing_prompt
+    monkeypatch.setitem(sys.modules, "src.auth_ui", fake_auth_ui)
+    monkeypatch.setattr(crypto, "USE_GUI_AUTH", True)
+    monkeypatch.setattr(crypto, "_prompt_passphrase", lambda: "fallback-passphrase")
+    monkeypatch.setattr(crypto, "_prompt_totp_code", lambda: "123456")
+
+    passphrase, code = crypto._prompt_passphrase_and_totp_combined("Test Title")
+
+    assert passphrase == "fallback-passphrase"
+    assert code == "123456"
+
+
 def test_setup_and_join_produce_matching_keys(monkeypatch):
     """End-to-end: a device that sets up and a device that joins must derive
     the same encryption key, given the same passphrase."""
