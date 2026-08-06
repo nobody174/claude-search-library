@@ -56,9 +56,9 @@ import logging
 import platform
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - all calls below use a fixed argv list, never shell=True
 import time
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosec B405 - see B314 note at the fromstring() call
 from pathlib import Path
 from typing import Optional
 
@@ -231,7 +231,11 @@ def _group_message_nodes_by_container(xml: str, screen_width: int) -> list[tuple
     each real message group as exactly one entry instead of being
     re-matched at every nesting level inside itself.
     """
-    root = ET.fromstring(xml)
+    # nosec B314 - this XML comes from `adb shell uiautomator dump` against
+    # the user's own physically-connected/paired device (see connect_device()),
+    # not from the network or any other untrusted source - defusedxml would
+    # add a dependency to guard against a threat model that doesn't apply here.
+    root = ET.fromstring(xml)  # nosec B314
     groups: list[tuple[int, list[str]]] = []
     min_width = int(screen_width * _MIN_MESSAGE_CONTAINER_WIDTH_FRACTION)
     _walk_for_message_containers(root, groups, min_width=min_width)
@@ -381,6 +385,9 @@ def _run_adb(args: list[str], device: Optional[str] = None, timeout: float = 15.
     # UnicodeDecodeError deep inside subprocess's reader thread rather
     # than a clean, catchable error at the call site.
     try:
+        # nosec B603 - cmd is a fixed argv list built from _resolve_adb_path()
+        # plus caller-supplied structured args (never a shell string), so
+        # there's no shell-injection surface here.
         return subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise AndroidNotConnectedError(

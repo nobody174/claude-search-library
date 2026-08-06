@@ -88,7 +88,7 @@ def derive_encryption_key(passphrase: str, totp_secret: str) -> bytes:
     break that. Brute-force resistance instead comes from the two
     independent factors (passphrase + TOTP secret) that must both be known.
     """
-    combined = f"{passphrase}:{totp_secret}".encode("utf-8")
+    combined = f"{passphrase}:{totp_secret}".encode()
     raw_key = hash_secret_raw(
         secret=combined,
         salt=ARGON2_SALT,
@@ -365,7 +365,7 @@ def _load_cached_session() -> Optional[dict]:
     still within SESSION_CACHE_TTL_SECONDS, else None (clearing an expired
     or corrupt cache file as a side effect)."""
     try:
-        with open(SESSION_CACHE_PATH, "r", encoding="utf-8") as f:
+        with open(SESSION_CACHE_PATH, encoding="utf-8") as f:
             cached = json.load(f)
         expires_at = datetime.fromisoformat(cached["expires_at"])
         encryption_key = cached["encryption_key"].encode("utf-8")

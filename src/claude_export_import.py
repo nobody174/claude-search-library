@@ -87,7 +87,7 @@ def _load_conversations(export_path: Path) -> list:
             with zf.open(candidates[0]) as f:
                 data = json.load(f)
     else:
-        with open(export_path, "r", encoding="utf-8") as f:
+        with open(export_path, encoding="utf-8") as f:
             data = json.load(f)
 
     if isinstance(data, dict):

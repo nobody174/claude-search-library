@@ -123,7 +123,7 @@ def _load_json_files(folder: Path) -> list[tuple[dict, str]]:
             # directory (e.g. a future --local-folder misconfiguration).
             continue
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Skipping unreadable export %s: %s", path, e)
@@ -251,7 +251,7 @@ def collect_from_cowork(cowork_path: Optional[str] = None) -> list[dict]:
             continue
 
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
+            with open(meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.warning("Failed to read Cowork session metadata %s: %s", meta_path, e)
@@ -320,7 +320,7 @@ def _convert_claude_code_transcript(jsonl_path: Path) -> Optional[dict]:
     title = None
     messages = []
 
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -427,10 +427,11 @@ def _idb_ssv_decode(buf: bytes, blink_deserializer, raw_db, db_id: int, store_id
     a claude.ai react-query cache holding real conversation histories, so
     this isn't an edge case for this collector - it's the common path.
     """
+    import io as _io
+
+    import ccl_simplesnappy
     from ccl_chromium_reader import ccl_chromium_indexeddb as idbmod
     from ccl_chromium_reader.serialization_formats import ccl_v8_value_deserializer
-    import ccl_simplesnappy
-    import io as _io
 
     if not buf or buf[0] != 0xFF:
         raise ValueError("Not a Blink-wrapped SSV (missing 0xFF tag)")
@@ -565,8 +566,8 @@ def collect_from_claude_desktop(indexeddb_root: Optional[str] = None) -> list[di
         return sessions
 
     try:
-        from ccl_chromium_reader.ccl_chromium_indexeddb import WrappedIndexDB
         from ccl_chromium_reader import ccl_chromium_indexeddb as idbmod
+        from ccl_chromium_reader.ccl_chromium_indexeddb import WrappedIndexDB
     except ImportError:
         logger.warning(
             "ccl_chromium_reader not installed; cannot read the Claude desktop "
@@ -753,7 +754,7 @@ def _load_raw_export_for_hash(session: dict) -> Optional[dict]:
     if not raw_path:
         return None
     try:
-        with open(raw_path, "r", encoding="utf-8") as f:
+        with open(raw_path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None

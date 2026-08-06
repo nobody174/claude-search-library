@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # requirements.txt's pinned lower-bounds (e.g. cryptography>=41.0.0)
+  # don't self-update - Dependabot is what actually keeps this project's
+  # real dependency exposure current, especially for the crypto/auth
+  # stack (cryptography, argon2-cffi, pyotp) this project's whole
+  # security model rests on.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # Keeps the CI workflow's own actions (actions/checkout, actions/setup-python)
+  # current - an out-of-date action version is itself a real, if usually
+  # low-severity, supply-chain surface.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"

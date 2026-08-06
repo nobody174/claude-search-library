@@ -1,0 +1,45 @@
+[tool.ruff]
+# 120, not ruff's 88 default - this codebase already runs long lines
+# routinely (SQL builders, redaction regex tables, error messages with
+# embedded context), and reformatting ~250 pre-existing lines to fit 88
+# cols in one pass would be a large, risky, purely-cosmetic diff with no
+# safety payoff. 120 is generous enough that the handful of lines still
+# over it (9, all in src/) are worth a human glance rather than a rewrap.
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Two tiers, run as separate CI steps (see .github/workflows/ci.yml):
+#
+# Hard-fail tier (E9, F821, F822, F823): real syntax errors and undefined
+# names. These are never a style opinion - code that trips them is broken,
+# full stop, so they gate the test job.
+#
+# Advisory tier (E, W, F, I, UP minus what's excepted below): pycodestyle,
+# pyflakes, isort, pyupgrade. Chosen because they catch real bugs (unused
+# imports, unsorted imports that hide accidental duplicate imports) and
+# outdated syntax, without pulling in opinionated style plugins (bandit's
+# own S-rules duplicate the real bandit job below; SIM/TRY/PLW/PYI are
+# taste calls this codebase never opted into) that would produce a wall
+# of new findings on a 2800-line codebase that's never been linted, for
+# marginal value. Runs report-only (not gating) so it surfaces drift
+# without blocking merges on a first pass.
+select = ["E", "W", "F", "I", "UP"]
+ignore = [
+    # UP045 (Optional[X] -> X | None) - 106 hits across the codebase.
+    # Purely a preference between two equally-valid modern spellings, not
+    # a bug or a deprecation; a mechanical rewrite of that size deserves
+    # its own reviewed change, not a drive-by in a CI-setup pass.
+    "UP045",
+    # UP017 (timezone.utc -> datetime.UTC alias) - same reasoning as UP045:
+    # `timezone.utc` is used consistently everywhere in this codebase
+    # (storage.py, sync.py, cost_tracker.py, crypto.py, collector.py), it's
+    # not deprecated, and swapping the whole codebase to the 3.11+ alias
+    # is a cosmetic rename that deserves its own change, not this one.
+    "UP017",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored/generated-shape files are exempt from the advisory tier entirely
+# rather than accumulating one-off ignores.
+"vendor/**" = ["E", "W", "F", "I", "UP"]

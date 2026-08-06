@@ -740,7 +740,12 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Claude Search Library REST API")
     parser.add_argument("--port", type=int, default=7654)
-    parser.add_argument("--host", default="0.0.0.0")
+    # Binding all interfaces is the intended default: this is a personal
+    # multi-device tool meant to be reached from a phone/tablet on the same
+    # LAN (see CLAUDE.md's mobile access notes), not a public web service.
+    # TLS is on by default; --no-tls (below) documents the real tradeoff
+    # for whoever opts out of it.
+    parser.add_argument("--host", default="0.0.0.0")  # nosec B104
     parser.add_argument(
         "--no-tls", action="store_true",
         help="Serve plain HTTP instead of HTTPS. The session cookie set on "

@@ -1,0 +1,123 @@
+name: CI
+
+# Runs on windows-latest, not ubuntu-latest, deliberately: the project's
+# real dev/deploy platform is Windows (see CLAUDE.md's Tech Stack table -
+# vendor/cr-sqlite's vendored binary is a Windows x86_64 DLL). Testing on
+# Linux would silently exercise storage.py's plain-SQLite fallback path
+# on every run instead of the real CRDT path this project actually ships
+# with, which would be false confidence, not real coverage. This applies
+# to every job below, not just tests - lint/security findings are only
+# meaningful against the code path that actually ships.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel a stale run when new commits land on the same branch/PR - a push
+# right after another push (or a PR synchronize event firing alongside the
+# branch push that triggered it) would otherwise burn two full Windows
+# runners' worth of Actions minutes on a commit nobody cares about anymore.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast, cheap, fails first: catches real breakage (syntax errors,
+  # undefined names) before spending Windows-runner minutes on the
+  # dependency install + test job below.
+  lint:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install ruff
+        run: python -m pip install ruff
+
+      - name: Lint (hard-fail - syntax errors, undefined names)
+        # E9 = actual syntax errors; F821/F822/F823 = undefined/undeclared
+        # names. Not style opinions - code that trips these is broken,
+        # full stop, so this gates everything after it.
+        run: python -m ruff check src cli.py server.py --select=E9,F821,F822,F823
+
+      - name: Lint (advisory - style, unused imports, modernization)
+        # Config lives in pyproject.toml ([tool.ruff]/[tool.ruff.lint]).
+        # Report-only: this codebase had no prior linting in place, so a
+        # first pass surfacing every pre-existing style deviation as a
+        # hard CI failure would block unrelated PRs on unrelated debt.
+        # continue-on-error keeps it visible in the run summary without
+        # gating merges; see pyproject.toml's comments for exactly which
+        # rules are selected/ignored and why.
+        run: python -m ruff check src cli.py server.py
+        continue-on-error: true
+
+  # Runs in parallel with lint (both are fast/cheap and independent) but
+  # tests below wait on both via needs:.
+  security:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install security tools
+        run: python -m pip install bandit pip-audit
+
+      - name: Static analysis (bandit)
+        # -ll -ii = medium severity + medium confidence and above. This is
+        # a local single-user tool with no network-exposed attack surface
+        # by default (server.py binds LAN for phone/tablet access, not the
+        # public internet - see server.py's nosec comment), so Menu-Planner's
+        # "high severity only" bar (right for a public web deploy) would be
+        # too loose here, and "all findings" would be too strict (bandit's
+        # low-confidence heuristics on a 2800-line untriaged codebase produce
+        # noise). Medium+medium is the real middle: it still catches the
+        # things that matter given this project handles encryption keys,
+        # TOTP secrets, GitHub tokens, and Claude API keys, without gating
+        # on every low-confidence guess. Every finding at this bar has
+        # either been fixed or has a `# nosec` with a reason inline.
+        run: python -m bandit -r src cli.py server.py -ll -ii
+
+      - name: Dependency vulnerability scan (pip-audit)
+        # pip-audit, not `safety check` - safety's free tier/database is
+        # effectively abandoned upstream. --ignore-vuln entries below are
+        # each pinned to a specific CVE ID with a reason, not a blanket
+        # skip; see the entry itself for why it doesn't apply to this
+        # project's actual deployment shape.
+        run: |
+          python -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-311
+          # PYSEC-2026-311: chromadb pre-auth code injection via its HTTP
+          # server's /collections endpoint with trust_remote_code=True.
+          # This project only ever constructs chromadb.PersistentClient
+          # (src/embedder.py) - an embedded, in-process client with no
+          # HTTP server, no network listener, and no trust_remote_code
+          # anywhere in this codebase - so the vulnerable code path is
+          # never reachable. No fixed release exists upstream yet as of
+          # writing; re-check this ignore whenever chromadb is bumped.
+
+  test:
+    needs: [lint, security]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --cov=src --cov-report=term-missing

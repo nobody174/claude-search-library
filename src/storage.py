@@ -67,14 +67,14 @@ def _configured_db_path() -> Optional[str]:
     if "DB_PATH" in os.environ:
         return os.environ["DB_PATH"]
 
-    from src.config import _find_config_path, _expand_paths, _substitute_env_vars
+    from src.config import _expand_paths, _find_config_path, _substitute_env_vars
 
     config_path = _find_config_path()
     if config_path is None:
         return None
     try:
         import yaml
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             raw_config = yaml.safe_load(f) or {}
         # A syntactically-valid YAML file whose top level isn't a mapping
         # (e.g. a bare list, a string) - _expand_paths()/.get() below
@@ -282,10 +282,13 @@ def _migrate_v1_to_v2_crdt_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.executescript(_SCHEMA)  # recreates sessions/summaries with the new constraint shape
 
+    # SESSION_COLUMNS is a hardcoded module-level constant list (line ~199),
+    # never user/request input, so there's no injection surface here; column
+    # names can't be parameterized with `?` placeholders in SQLite anyway.
     conn.execute(f"""
         INSERT INTO sessions ({', '.join(SESSION_COLUMNS)})
         SELECT {', '.join(SESSION_COLUMNS)} FROM sessions_v1_old
-    """)
+    """)  # nosec B608
     conn.execute("""
         INSERT INTO summaries (
             session_id, tldr, learnings, patterns, tags, mentioned_tools,
@@ -470,7 +473,7 @@ class Storage:
         db_dir = Path(self.db_path).resolve().parent
         return str(db_dir.parent / "summaries" / "ai-summaries.jsonl")
 
-    def __enter__(self) -> "Storage":
+    def __enter__(self) -> Storage:
         self._conn = init_db(self.db_path)
         return self
 
@@ -505,8 +508,10 @@ class Storage:
         values = [session_dict.get(col) for col in SESSION_COLUMNS]
         placeholders = ", ".join("?" for _ in SESSION_COLUMNS)
         with self._cursor() as cur:
+            # SESSION_COLUMNS is a hardcoded constant (see note near its
+            # definition); `values` themselves go through `?` placeholders.
             cur.execute(
-                f"INSERT INTO sessions ({', '.join(SESSION_COLUMNS)}) VALUES ({placeholders})",
+                f"INSERT INTO sessions ({', '.join(SESSION_COLUMNS)}) VALUES ({placeholders})",  # nosec B608
                 values,
             )
         return session_id
@@ -520,7 +525,10 @@ class Storage:
         set_clause = ", ".join(f"{f} = ?" for f in fields)
         values = [updated_fields[f] for f in fields] + [session_id]
         with self._cursor() as cur:
-            cur.execute(f"UPDATE sessions SET {set_clause} WHERE id = ?", values)
+            # `fields` is filtered to SESSION_COLUMNS above, so `set_clause`
+            # can only ever contain known-safe column names; values are still
+            # bound via `?` placeholders, not interpolated.
+            cur.execute(f"UPDATE sessions SET {set_clause} WHERE id = ?", values)  # nosec B608
             return cur.rowcount > 0
 
     def get_session(self, session_id: str) -> Optional[dict]:
@@ -815,7 +823,7 @@ class Storage:
 
         count = 0
         with self._cursor() as cur:
-            with open(input_file, "r", encoding="utf-8") as f:
+            with open(input_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -1033,7 +1041,7 @@ class Storage:
                     missing_raw_files += 1
                     continue
                 try:
-                    with open(raw_path, "r", encoding="utf-8") as f:
+                    with open(raw_path, encoding="utf-8") as f:
                         raw_session = json.load(f)
                 except (OSError, json.JSONDecodeError) as e:
                     warnings.append(f"Session {row['id']}: could not read/parse raw file for hash check ({e})")
@@ -1110,7 +1118,7 @@ class Storage:
             elif os.path.exists(jsonl_path):
                 valid_lines = 0
                 invalid_lines = 0
-                with open(jsonl_path, "r", encoding="utf-8") as f:
+                with open(jsonl_path, encoding="utf-8") as f:
                     for lineno, line in enumerate(f, start=1):
                         if not line.strip():
                             continue

@@ -34,7 +34,7 @@ def _load_messages(session: dict) -> list:
     if not raw_path:
         return []
     try:
-        with open(raw_path, "r", encoding="utf-8") as f:
+        with open(raw_path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Could not read raw export %s for markdown export: %s", raw_path, e)

@@ -107,7 +107,7 @@ def load_config(config_path: Optional[str] = None) -> dict:
     resolved_path = _find_config_path(config_path)
     source_path = resolved_path if resolved_path is not None else TEMPLATE_PATH
 
-    with open(source_path, "r", encoding="utf-8") as f:
+    with open(source_path, encoding="utf-8") as f:
         raw_config = yaml.safe_load(f) or {}
 
     config = _substitute_env_vars(raw_config)

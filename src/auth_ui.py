@@ -89,7 +89,10 @@ def _run_popup(build_fn) -> dict:
     finally:
         try:
             root.after_cancel(timer_id)
-        except Exception:
+        except Exception:  # nosec B110 - best-effort cleanup after mainloop
+            # has already returned; the window is closing either way, and
+            # there's no logger wired into this module for what would be
+            # pure noise (Tk raises here if the timer already fired).
             pass
         try:
             root.destroy()

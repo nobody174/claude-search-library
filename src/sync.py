@@ -28,7 +28,7 @@ from typing import Optional
 from git import GitCommandError, InvalidGitRepositoryError, Repo
 
 from src import crypto
-from src.storage import CR_SQLITE_CRR_TABLES, Storage
+from src.storage import Storage
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def _read_sync_metadata(repo_path: Path) -> dict:
     path = repo_path / SYNC_METADATA_FILENAME
     if not path.exists():
         return {"devices": {}}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -307,8 +307,11 @@ class SyncWorker:
             metadata = _read_sync_metadata(self.repo_path)
             last_pushed = metadata.get("devices", {}).get(device_id, {}).get("last_pushed_db_version", 0)
 
+            # _CRSQL_CHANGES_COLUMNS_SQL is built from the hardcoded
+            # _CRSQL_CHANGES_COLUMNS tuple (line ~54), never external input;
+            # the actual query parameter (last_pushed) is bound via `?`.
             rows = db.conn.execute(
-                f'SELECT {_CRSQL_CHANGES_COLUMNS_SQL} FROM crsql_changes '
+                f'SELECT {_CRSQL_CHANGES_COLUMNS_SQL} FROM crsql_changes '  # nosec B608
                 f'WHERE db_version > ? AND site_id = crsql_site_id()',
                 (last_pushed,),
             ).fetchall()
@@ -423,8 +426,10 @@ class SyncWorker:
                         continue
 
                     for row in changeset:
+                        # Same hardcoded-columns reasoning as push_to_github()
+                        # above; row values are bound via `?` placeholders.
                         db.conn.execute(
-                            f'INSERT INTO crsql_changes ({_CRSQL_CHANGES_COLUMNS_SQL}) '
+                            f'INSERT INTO crsql_changes ({_CRSQL_CHANGES_COLUMNS_SQL}) '  # nosec B608
                             f'VALUES (?,?,?,?,?,?,?,?,?)',
                             _decode_changeset_row(row),
                         )
