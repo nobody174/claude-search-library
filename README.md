@@ -125,7 +125,7 @@ python3 cli.py collect --dry-run    # preview without importing
 python3 cli.py process --batch-size 10
 
 # Search
-python3 cli.py search "minecraft mod debugging"
+python3 cli.py search "async patterns"
 python3 cli.py search "python" --mode keyword --filters '{"source":"vscode"}'
 
 # Check archive integrity (run before syncing)
@@ -141,7 +141,7 @@ python3 cli.py sync --watch      # daemon mode
 
 # REST API
 python3 server.py --port 7654
-curl "http://localhost:7654/search?q=minecraft&mode=hybrid" | jq
+curl "http://localhost:7654/search?q=async+patterns&mode=hybrid" | jq
 curl http://localhost:7654/stats | jq
 curl http://localhost:7654/health | jq
 
@@ -165,7 +165,7 @@ Real `cli.py` commands, work for anyone who clones this repo, no setup
 beyond the install steps above:
 
 ```bash
-python3 cli.py "minecraft mod debugging"   # bare query = quick search (same as `search`)
+python3 cli.py "async patterns"            # bare query = quick search (same as `search`)
 python3 cli.py pull                        # shortcut for `sync --pull`
 python3 cli.py push                        # shortcut for `sync --push`
 python3 cli.py webui                       # starts server.py if it isn't already running, opens the browser

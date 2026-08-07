@@ -176,9 +176,9 @@ Respond with exactly this structure:
     "tags": ["tag1", "tag2"],
     "mentioned_tools": ["Tool1", "Tool2"],
     "mentioned_languages": ["Python", "TypeScript"],
-    "mentioned_frameworks": ["Phaser 3", "NeoForge"],
+    "mentioned_frameworks": ["Framework1", "Framework2"],
     "estimated_effort_minutes": 45,
-    "topic_categories": ["minecraft-modding", "debugging"],
+    "topic_categories": ["category1", "debugging"],
     "confidence_score": 0.92
 }
 ```
