@@ -159,28 +159,27 @@ curl "http://localhost:7654/costs?month=2026-08" | jq
 curl "http://localhost:7654/costs?quarter=2026-Q3" | jq
 ```
 
-### Shell Shortcut (`csl`)
+### Shortcuts
 
-**C**laude **S**earch **L**ibrary — optional `csl` shell function, a
-personal convenience alias (not part of the tool's own code) for the
-commands used most often, callable from any directory. Defined once per
-shell (Git Bash's `~/.bash_profile`, PowerShell's `$PROFILE`), not in
-this repo.
+Real `cli.py` commands, work for anyone who clones this repo, no setup
+beyond the install steps above:
 
-```
-csl <query>   # python3 cli.py search "<query>"
-csl pull      # python3 cli.py sync --pull
-csl push      # python3 cli.py sync --push
-csl sync      # python3 cli.py sync (bidirectional)
-csl webui     # open https://localhost:7654 in your default browser
-csl help      # list these
+```bash
+python3 cli.py "minecraft mod debugging"   # bare query = quick search (same as `search`)
+python3 cli.py pull                        # shortcut for `sync --pull`
+python3 cli.py push                        # shortcut for `sync --push`
+python3 cli.py webui                       # starts server.py if it isn't already running, opens the browser
 ```
 
-A bare recognized word (`pull`/`push`/`sync`/`webui`/`help`) runs its
-command; anything else is treated as a search query — so `csl pull`
-syncs, but `csl "pull request bug"` still searches for that literal
-phrase. `csl webui` just opens the URL — `server.py` needs to already
-be running (see [Web UI](#web-ui)).
+`webui` is the only one of these that needs `server.py` running — it
+checks first and starts it for you if needed (see [Web UI](#web-ui)).
+Everything else (`search`, `sync`, `collect`, ...) talks directly to
+the local DB/GitHub.
+
+If you'd rather type `csl` than `python3 cli.py`, that's a personal
+shell alias, not part of this repo — see your shell's function/alias
+syntax (`~/.bash_profile` for Git Bash, `$PROFILE` for PowerShell) to
+set one up pointing at whichever of the above commands you use most.
 
 ## Web UI
 

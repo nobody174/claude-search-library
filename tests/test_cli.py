@@ -346,3 +346,101 @@ def test_sync_command_no_collect_skips_collection(runner, monkeypatch):
     result = runner.invoke(cli.cli, ["sync", "--no-collect"])
     assert result.exit_code == 0
     assert len(calls) == 0
+
+
+def test_pull_command_is_a_sync_pull_shortcut(runner, monkeypatch):
+    """pull/push exist so any real user of this repo - not just someone
+    with a personal shell alias set up - gets a short command; found via
+    a real gap (a documented `csl` shell function only worked on the
+    machine it was defined on, not for anyone cloning the repo)."""
+    monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda fail_fast=False: {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+
+    class FakeWorker:
+        def __init__(self, encryption_key):
+            pass
+
+        def pull_from_github(self):
+            return {"direction": "pull", "files_changed": 4}
+
+    monkeypatch.setattr("src.sync.SyncWorker", FakeWorker)
+
+    result = runner.invoke(cli.cli, ["pull"])
+    assert result.exit_code == 0
+    data = json.loads(result.output[result.output.index("{"):])
+    assert data["direction"] == "pull"
+    assert data["files_changed"] == 4
+
+
+def test_push_command_is_a_sync_push_shortcut(runner, monkeypatch):
+    monkeypatch.setattr("src.crypto.join_device_existing_setup", lambda: {"encryption_key": b"key"})
+    monkeypatch.setattr(
+        "src.orchestration.run_collection",
+        lambda fail_fast=False: {"new": 0, "errors": 0, "total": 0, "sources": {}},
+    )
+
+    class FakeWorker:
+        def __init__(self, encryption_key):
+            pass
+
+        def push_to_github(self):
+            return {"direction": "push", "files_changed": 1}
+
+    monkeypatch.setattr("src.sync.SyncWorker", FakeWorker)
+
+    result = runner.invoke(cli.cli, ["push"])
+    assert result.exit_code == 0
+    data = json.loads(result.output[result.output.index("{"):])
+    assert data["direction"] == "push"
+
+
+def test_webui_command_skips_starting_server_if_already_up(runner, monkeypatch):
+    """The only cli.py command that needs server.py running - checks
+    first rather than always spawning a redundant second server."""
+    monkeypatch.setattr("cli._webui_is_up", lambda port: True)
+
+    started = []
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: started.append(1))
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+
+    result = runner.invoke(cli.cli, ["webui"])
+
+    assert result.exit_code == 0
+    assert started == []
+    assert opened == ["https://localhost:7654"]
+
+
+def test_webui_command_starts_server_when_not_up(runner, monkeypatch):
+    calls = {"count": 0}
+
+    def fake_is_up(port):
+        # False on the initial check, True once "started"
+        calls["count"] += 1
+        return calls["count"] > 1
+
+    monkeypatch.setattr("cli._webui_is_up", fake_is_up)
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: None)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+
+    result = runner.invoke(cli.cli, ["webui"])
+
+    assert result.exit_code == 0
+    assert "Starting server.py..." in result.output
+    assert opened == ["https://localhost:7654"]
+
+
+def test_webui_command_reports_error_if_server_never_comes_up(runner, monkeypatch):
+    monkeypatch.setattr("cli._webui_is_up", lambda port: False)
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: None)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    result = runner.invoke(cli.cli, ["webui"])
+
+    assert result.exit_code != 0
+    assert "didn't come up in time" in result.output

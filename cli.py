@@ -379,6 +379,73 @@ def sync(pull: bool, push: bool, watch: bool, no_collect: bool) -> None:
     click.echo(json.dumps(result, indent=2))
 
 
+@cli.command()
+@click.pass_context
+def pull(ctx: click.Context) -> None:
+    """Shortcut for `sync --pull`."""
+    ctx.invoke(sync, pull=True)
+
+
+@cli.command()
+@click.pass_context
+def push(ctx: click.Context) -> None:
+    """Shortcut for `sync --push`."""
+    ctx.invoke(sync, push=True)
+
+
+def _webui_is_up(port: int) -> bool:
+    import ssl
+    import urllib.request
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    for scheme in ("https", "http"):
+        url = f"{scheme}://localhost:{port}/"
+        request_ctx = ctx if scheme == "https" else None
+        try:
+            # nosec B310 - url is built entirely from a hardcoded
+            # "localhost" and a local int `port`, never attacker-
+            # controlled input; this is a local health-check probe, not
+            # a URL-fetching feature.
+            urllib.request.urlopen(url, timeout=1, context=request_ctx)  # nosec B310
+            return True
+        except Exception:
+            continue
+    return False
+
+
+@cli.command()
+@click.option("--port", default=7654, show_default=True)
+def webui(port: int) -> None:
+    """Open the web UI, starting server.py first if it isn't already running.
+
+    The only cli.py command that needs server.py running - search/sync/
+    collect/etc. all work directly against the local DB/GitHub, no HTTP
+    server involved.
+    """
+    import subprocess
+    import time
+    import webbrowser
+
+    if not _webui_is_up(port):
+        click.echo("Starting server.py...")
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve().parent / "server.py"), "--port", str(port)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        )
+        for _ in range(10):
+            if _webui_is_up(port):
+                break
+            time.sleep(1)
+        else:
+            click.echo("server.py didn't come up in time - check for errors and try again.")
+            raise SystemExit(1)
+
+    webbrowser.open(f"https://localhost:{port}")
+
+
 if __name__ == "__main__":
     cli()
 
