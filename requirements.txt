@@ -30,7 +30,7 @@ watchdog>=6.0.0
 apscheduler>=3.10.0
 
 # CLI
-click>=8.1.0
+click>=8.4.2
 
 # Claude desktop app collector (src/collector.py:collect_from_claude_desktop) -
 # reads the Electron app's local Chromium IndexedDB/LevelDB cache. Not on
