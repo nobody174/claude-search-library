@@ -181,10 +181,11 @@ curl "http://localhost:7654/costs?quarter=2026-Q3" | jq
 
 ### Shell Shortcut (`csl`)
 
-Optional `csl` shell function — a personal convenience alias, not part of
-the tool's own code — for the commands used most often, callable from
-any directory. Defined once per shell (Git Bash's `~/.bash_profile`,
-PowerShell's `$PROFILE`), not in this repo.
+**C**laude **S**earch **L**ibrary — optional `csl` shell function, a
+personal convenience alias (not part of the tool's own code) for the
+commands used most often, callable from any directory. Defined once per
+shell (Git Bash's `~/.bash_profile`, PowerShell's `$PROFILE`), not in
+this repo.
 
 ```
 csl <query>   # python3 cli.py search "<query>"
