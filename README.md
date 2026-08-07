@@ -97,6 +97,19 @@ python3 src/sync.py --daemon &
 python3 server.py --port 7654 &
 ```
 
+### Access from Desktop (Web UI)
+
+Once `server.py` is running (see above), open the same web UI locally:
+
+```
+1. Browser: https://localhost:7654
+2. Enter master passphrase
+3. Enter Google Authenticator code
+4. Start searching!
+```
+
+Self-signed cert warning is expected the first time (see `start_server.bat`'s comments) — click through it, it won't ask again on that browser.
+
 ### Access from Mobile
 
 ```
@@ -165,6 +178,26 @@ curl http://localhost:7654/session/SESSION_ID/related | jq
 curl "http://localhost:7654/costs?month=2026-08" | jq
 curl "http://localhost:7654/costs?quarter=2026-Q3" | jq
 ```
+
+### Shell Shortcut (`csl`)
+
+Optional `csl` shell function — a personal convenience alias, not part of
+the tool's own code — for the commands used most often, callable from
+any directory. Not `!!`: that's reserved in bash for history expansion,
+so `csl` is used instead. Defined once per shell (Git Bash's
+`~/.bash_profile`, PowerShell's `$PROFILE`), not in this repo.
+
+```
+csl <query>   # python3 cli.py search "<query>"
+csl pull      # python3 cli.py sync --pull
+csl push      # python3 cli.py sync --push
+csl sync      # python3 cli.py sync (bidirectional)
+csl help      # list these
+```
+
+A bare recognized word (`pull`/`push`/`sync`/`help`) runs its command;
+anything else is treated as a search query — so `csl pull` syncs, but
+`csl "pull request bug"` still searches for that literal phrase.
 
 ## Architecture
 
