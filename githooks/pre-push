@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Claude Search Library - pre-push hook
+#
+# Runs the same checks CI runs (see .github/workflows/ci.yml), locally,
+# before anything leaves this machine. A failure here blocks the push
+# entirely - the whole point is catching what CI would catch anyway,
+# minutes sooner and without spending Actions runner time on something
+# that was always going to fail.
+#
+# Not installed automatically by git (hooks in .git/hooks/ aren't
+# version-controlled) - run scripts/install-hooks.sh once after cloning
+# to activate this. Safe to skip if you'd rather rely on CI alone; this
+# is a convenience, not a requirement enforced anywhere else.
+
+set -e
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if [ -x "venv/Scripts/python.exe" ]; then
+    PY="venv/Scripts/python.exe"
+elif [ -x "venv/bin/python" ]; then
+    PY="venv/bin/python"
+else
+    echo "pre-push: no venv found at venv/ - run the install steps in README.md first, or skip this hook (git push --no-verify)."
+    exit 1
+fi
+
+echo "pre-push: lint (hard-fail - syntax errors, undefined names)..."
+"$PY" -m ruff check src cli.py server.py --select=E9,F821,F822,F823
+
+echo "pre-push: lint (style, unused imports, modernization)..."
+"$PY" -m ruff check src cli.py server.py
+
+echo "pre-push: security - static analysis (bandit)..."
+"$PY" -m bandit -r src cli.py server.py -ll -ii
+
+echo "pre-push: security - dependency vulnerability scan (pip-audit)..."
+"$PY" -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-311
+
+echo "pre-push: JS tests (src/api.js)..."
+node --test tests/js/
+
+echo "pre-push: Python tests..."
+"$PY" -m pytest tests/ -q
+
+echo "pre-push: all checks passed."

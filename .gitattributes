@@ -1,0 +1,8 @@
+# Shell scripts must keep LF line endings regardless of the checking-out
+# OS's line-ending config - a CRLF shebang ("#!/bin/sh\r") is not a valid
+# shebang and fails to execute at all. Found while adding githooks/pre-push:
+# this repo had no .gitattributes at all, so Windows' core.autocrlf=true
+# (a common Git-for-Windows default) would silently corrupt these on
+# checkout for any Windows contributor.
+*.sh text eol=lf
+githooks/* text eol=lf

@@ -347,6 +347,13 @@ claude-search-library/
 
 Issues and pull requests are welcome. This started as a personal tool, so expect some rough edges — see `CLAUDE.md` for known limitations (e.g. cr-sqlite CRDT support is best-effort and falls back to a simpler merge policy where the native extension isn't available).
 
+Optional: `bash scripts/install-hooks.sh` (once, after cloning) makes
+`git push` run the same lint/security/test checks CI does, locally,
+first — catches what CI would catch minutes sooner, without spending
+Actions runner time on a push that was always going to fail. Not
+required (CI runs regardless); skip a single push with `git push
+--no-verify`, or just don't install it.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
