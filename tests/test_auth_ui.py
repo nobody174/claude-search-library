@@ -118,11 +118,23 @@ def test_run_popup_raises_cancelled_on_empty_submit(monkeypatch):
 
 
 def _tk_display_available() -> bool:
+    """A bare tk.Tk() isn't a sufficient check on its own - found via a
+    real CI failure (2026-08-07): GitHub's windows-latest runner image
+    can construct a root Tk window fine (no display/DISPLAY-env problem)
+    while its bundled Tcl/Tk library files are still incomplete
+    (tk.tcl's entry.tcl was missing), which only surfaces once a real
+    widget - not just the bare root - is built. _run_popup() always
+    builds an Entry widget, so this check must too, or it reports
+    "display available" for an environment where the real popup path
+    still crashes with TclError."""
     try:
         import tkinter as tk
 
         root = tk.Tk()
-        root.destroy()
+        try:
+            tk.Entry(root)
+        finally:
+            root.destroy()
         return True
     except Exception:
         return False
