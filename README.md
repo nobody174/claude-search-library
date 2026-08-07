@@ -172,12 +172,15 @@ csl <query>   # python3 cli.py search "<query>"
 csl pull      # python3 cli.py sync --pull
 csl push      # python3 cli.py sync --push
 csl sync      # python3 cli.py sync (bidirectional)
+csl webui     # open https://localhost:7654 in your default browser
 csl help      # list these
 ```
 
-A bare recognized word (`pull`/`push`/`sync`/`help`) runs its command;
-anything else is treated as a search query — so `csl pull` syncs, but
-`csl "pull request bug"` still searches for that literal phrase.
+A bare recognized word (`pull`/`push`/`sync`/`webui`/`help`) runs its
+command; anything else is treated as a search query — so `csl pull`
+syncs, but `csl "pull request bug"` still searches for that literal
+phrase. `csl webui` just opens the URL — `server.py` needs to already
+be running (see [Web UI](#web-ui)).
 
 ## Web UI
 
