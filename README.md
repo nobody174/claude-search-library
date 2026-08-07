@@ -97,27 +97,7 @@ python3 src/sync.py --daemon &
 python3 server.py --port 7654 &
 ```
 
-### Access from Desktop (Web UI)
-
-Once `server.py` is running (see above), open the same web UI locally:
-
-```
-1. Browser: https://localhost:7654
-2. Enter master passphrase
-3. Enter Google Authenticator code
-4. Start searching!
-```
-
-Self-signed cert warning is expected the first time (see `start_server.bat`'s comments) — click through it, it won't ask again on that browser.
-
-### Access from Mobile
-
-```
-1. Browser: https://<host-device-ip>:7654
-2. Enter master passphrase
-3. Enter Google Authenticator code
-4. Start searching!
-```
+Once `server.py` is running, the web UI is reachable from desktop and mobile — see the [Web UI](#web-ui) section below.
 
 ## Search Modes
 
@@ -199,6 +179,59 @@ A bare recognized word (`pull`/`push`/`sync`/`help`) runs its command;
 anything else is treated as a search query — so `csl pull` syncs, but
 `csl "pull request bug"` still searches for that literal phrase.
 
+## Web UI
+
+A React single-page app (`public/index.html`, loaded from a CDN — no
+build step, nothing to compile) served by `server.py`. Same UI whether
+you're on the machine running the server or a phone/tablet on the same
+network.
+
+### Access
+
+Start the server first (`python3 server.py --port 7654`, or double-click
+`start_server.bat` on Windows), then open it in a browser:
+
+**Desktop** (same machine running the server):
+```
+https://localhost:7654
+```
+
+**Mobile / another device on the same network**:
+```
+https://<host-device-ip>:7654
+```
+Find `<host-device-ip>` with `ipconfig` (Windows) or `ifconfig`/`ip a`
+(macOS/Linux) on the machine running `server.py`.
+
+Either way, unlocking is the same:
+1. Enter master passphrase
+2. Enter Google Authenticator code
+3. Start searching
+
+The self-signed cert warning on first visit is expected (see
+`start_server.bat`'s comments) — click through it once per browser.
+
+### Using It
+
+- **Search** (default view) — type a query, pick a mode (`hybrid` /
+  `semantic` / `keyword`, see [Search Modes](#search-modes)) and
+  optional filters (source, device, tags, date range). Click a result
+  to open its full session detail, including related sessions sharing
+  tags.
+- **Devices** — shows every synced device, last-sync time, and pending
+  changes; **Pull** / **Push** / **Sync Now** buttons trigger the same
+  sync `cli.py sync` does, each requiring your passphrase + TOTP code
+  again (the server never caches the derived key between requests).
+  Also lists sessions stuck in `needs_review` or `new`, with one-click
+  **Reprocess** (single session) or **Reprocess All** (confirms first —
+  it calls the paid Claude API once per session).
+- **Health badge** (top of Search) — surfaces archive integrity issues
+  (same checks as `cli.py verify`) directly in the UI; expand it for
+  details before syncing if something looks off.
+- **Lock** — ends the session on both the browser and the server side
+  (not just a client-side flag), requiring the full passphrase + TOTP
+  unlock again next time.
+
 ## Architecture
 
 ```
@@ -268,7 +301,7 @@ A: Run `python3 cli.py verify` to detect it, then `python3 -m src.storage --rest
 - **HTTPS by default, via a self-signed cert**: `server.py` generates/uses a cert at `~/.claude-search-library/certs/` so the session cookie doesn't cross your LAN in cleartext (`--no-tls` opts back into plain HTTP for pure-localhost dev). Because it's self-signed, not issued by a public Certificate Authority, your browser will show a "Not secure" / "connection isn't private" warning the first time each device connects — this is expected, not a sign anything's broken, and is the same tradeoff every self-hosted LAN tool with HTTPS makes (router admin pages, home NAS UIs, etc.) without a public domain to get a CA-signed cert from. Two ways to deal with it:
   - **Click through it** (Advanced → Proceed) — the connection is still genuinely encrypted, just not vouched for by a public CA. You'll need to do this once per browser/device.
   - **Trust the cert permanently** on a device you control, so the warning stops appearing entirely: import `~/.claude-search-library/certs/server.crt` into that OS's trusted root certificate store (on Windows: `certutil -user -addstore Root path\to\server.crt`, then fully restart your browser). This only works for your own devices — there's no way to make a self-signed cert "trusted" for an arbitrary stranger's browser; that requires a real public domain and a CA like Let's Encrypt, a fundamentally different deployment model than a self-hosted LAN tool.
-- **CORS is restricted** to `localhost`/`127.0.0.1` by default in `server.py` — do not expose the API port directly to the public internet without adding your own auth/reverse-proxy layer.
+- **CORS permits no origins** (`CORS(app, origins=[])` in `server.py`) — the web UI only ever makes same-origin requests, so no cross-origin access is legitimate; the session cookie's `SameSite=Strict` already blocks a malicious LAN page from riding a victim's session regardless. Do not expose the API port directly to the public internet without adding your own auth/reverse-proxy layer.
 
 If you find a security issue, please open a private security advisory on GitHub rather than a public issue.
 
