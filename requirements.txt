@@ -43,7 +43,7 @@ git+https://github.com/obsidianforensics/ccl_chrome_indexeddb.git
 pytest>=7.0.0
 pytest-cov>=4.0.0
 ruff>=0.16.0
-bandit>=1.9.0
+bandit>=1.9.4
 pip-audit>=2.10.0
 
 # Android chat-capture bridge (src/android_bridge.py) - NOT a pip package.
