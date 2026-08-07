@@ -183,9 +183,8 @@ curl "http://localhost:7654/costs?quarter=2026-Q3" | jq
 
 Optional `csl` shell function — a personal convenience alias, not part of
 the tool's own code — for the commands used most often, callable from
-any directory. Not `!!`: that's reserved in bash for history expansion,
-so `csl` is used instead. Defined once per shell (Git Bash's
-`~/.bash_profile`, PowerShell's `$PROFILE`), not in this repo.
+any directory. Defined once per shell (Git Bash's `~/.bash_profile`,
+PowerShell's `$PROFILE`), not in this repo.
 
 ```
 csl <query>   # python3 cli.py search "<query>"
