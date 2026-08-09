@@ -293,6 +293,42 @@ def test_pull_from_github_decrypts_and_merges(repo_path, mock_repo, tmp_path, en
         assert summary["tldr"] == "Did a thing."
 
 
+def test_pull_from_github_downloads_raw_chat_files(repo_path, mock_repo, tmp_path, encryption_key, monkeypatch):
+    """Regression test for a real production bug: pull_from_github() applied
+    changesets (so a pulled session's raw_file_path still pointed at the
+    OTHER device's local filesystem path) but never downloaded the raw
+    chat file itself - Reprocess silently failed for every session pulled
+    from another device. Fixed by decrypting encrypted_raw_chats/*.enc and
+    re-pointing raw_file_path at a local copy."""
+    db_path = str(tmp_path / "test.db")
+    home = tmp_path / "home"
+    monkeypatch.setattr(sync.Path, "home", staticmethod(lambda: home))
+
+    with Storage(db_path) as db:
+        db.insert_session(_sample_session("sess-remote", "2026-08-01T00:00:00+00:00"))
+        # Simulate what a changeset pull would have already merged in: a
+        # session row whose raw_file_path points at a device that isn't
+        # this one.
+        db.update_session("sess-remote", {"raw_file_path": r"C:\Users\OtherDevice\raw.json"})
+
+    raw_dir = repo_path / sync.ENCRYPTED_RAW_CHATS_DIR
+    raw_dir.mkdir(parents=True)
+    raw_content = json.dumps({"id": "sess-remote", "messages": []}).encode("utf-8")
+    blob = crypto.encrypt_data(raw_content, encryption_key)
+    (raw_dir / "sess-remote_raw.enc").write_text(blob, encoding="utf-8")
+
+    worker = sync.SyncWorker(encryption_key, repo_path=str(repo_path), db_path=db_path)
+    worker.pull_from_github()
+
+    with Storage(db_path) as db:
+        session = db.get_session("sess-remote")
+
+    expected_path = home / ".claude-search-library" / "data" / "raw_exports" / "claude-ai" / "sess-remote.json"
+    assert session["raw_file_path"] == str(expected_path)
+    assert expected_path.exists()
+    assert json.loads(expected_path.read_text(encoding="utf-8")) == {"id": "sess-remote", "messages": []}
+
+
 def test_pull_from_github_fresh_device_with_no_local_sessions(repo_path, mock_repo, tmp_path, encryption_key):
     """Regression test: a second/fresh device that has never locally
     collected anything must still be able to pull. The old FK from

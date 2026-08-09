@@ -147,10 +147,10 @@ async function getHealth() {
  *
  * Returns {direction, files_changed, conflicts, reindexed}.
  */
-async function sync(passphrase, totpCode, direction = "bidirectional") {
+async function sync(direction = "bidirectional") {
   return request("/sync", {
     method: "POST",
-    body: JSON.stringify({ passphrase, totp_code: totpCode, direction }),
+    body: JSON.stringify({ direction }),
   });
 }
 

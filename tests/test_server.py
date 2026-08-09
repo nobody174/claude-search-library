@@ -41,6 +41,10 @@ def client(tmp_path, monkeypatch):
         # encrypted TOTP secrets that don't exist in a test environment.
         token = server._create_session()
         c.set_cookie(server.SESSION_COOKIE_NAME, token)
+        # /sync now reads its encryption key from this cache instead of the
+        # request body (see server.py's _session_keys) - a real /setup call
+        # would populate it, so tests that exercise /sync need a stand-in.
+        server._session_keys[token] = b"fake-key"
         yield c
 
 
@@ -432,31 +436,24 @@ def test_setup_endpoint_wrong_totp_returns_401(client, monkeypatch):
     assert resp.get_json()["success"] is False
 
 
-def test_sync_endpoint_requires_passphrase_and_code(client):
-    resp = client.post("/sync", data=json.dumps({}), content_type="application/json")
-    assert resp.status_code == 400
-
-
 def test_sync_endpoint_rejects_bad_direction(client):
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "p", "totp_code": "123456", "direction": "sideways"}),
+        data=json.dumps({"direction": "sideways"}),
         content_type="application/json",
     )
     assert resp.status_code == 400
 
 
-def test_sync_endpoint_invalid_credentials_returns_401(client, monkeypatch):
-    def raise_invalid(passphrase, totp_code):
-        raise ValueError("Invalid passphrase")
+def test_sync_endpoint_no_cached_key_returns_401(client):
+    """A session that exists but has no cached key (e.g. it expired out of
+    _session_keys while _sessions didn't, which shouldn't normally happen
+    since they're created/cleared together, but /sync must fail closed
+    rather than assume any key) must be rejected rather than crash."""
+    token = client.get_cookie(server.SESSION_COOKIE_NAME).value
+    server._session_keys.pop(token, None)
 
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", raise_invalid)
-
-    resp = client.post(
-        "/sync",
-        data=json.dumps({"passphrase": "wrong", "totp_code": "000000"}),
-        content_type="application/json",
-    )
+    resp = client.post("/sync", data=json.dumps({}), content_type="application/json")
     assert resp.status_code == 401
     assert "error" in resp.get_json()
 
@@ -497,13 +494,12 @@ class _FakeSyncWorker:
 
 
 def test_sync_endpoint_success_defaults_to_bidirectional(client, monkeypatch):
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
     _FakeSyncWorker.instances = []
     monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
 
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456"}),
+        data=json.dumps({}),
         content_type="application/json",
     )
     assert resp.status_code == 200
@@ -518,13 +514,12 @@ def test_sync_endpoint_success_defaults_to_bidirectional(client, monkeypatch):
 
 
 def test_sync_endpoint_pull_only_uses_flat_pull_result(client, monkeypatch):
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
     _FakeSyncWorker.instances = []
     monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
 
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456", "direction": "pull"}),
+        data=json.dumps({"direction": "pull"}),
         content_type="application/json",
     )
     assert resp.status_code == 200
@@ -535,13 +530,12 @@ def test_sync_endpoint_pull_only_uses_flat_pull_result(client, monkeypatch):
 
 
 def test_sync_endpoint_push_only_uses_flat_push_result(client, monkeypatch):
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
     _FakeSyncWorker.instances = []
     monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
 
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456", "direction": "push"}),
+        data=json.dumps({"direction": "push"}),
         content_type="application/json",
     )
     assert resp.status_code == 200
@@ -555,7 +549,6 @@ def test_sync_endpoint_push_only_uses_flat_push_result(client, monkeypatch):
 def test_sync_endpoint_collects_before_syncing(client, monkeypatch):
     import src.orchestration as orchestration_module
 
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
     _FakeSyncWorker.instances = []
     monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
 
@@ -567,7 +560,7 @@ def test_sync_endpoint_collects_before_syncing(client, monkeypatch):
 
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456"}),
+        data=json.dumps({}),
         content_type="application/json",
     )
     assert resp.status_code == 200
@@ -577,7 +570,6 @@ def test_sync_endpoint_collects_before_syncing(client, monkeypatch):
 def test_sync_endpoint_collect_failure_does_not_block_sync(client, monkeypatch):
     import src.orchestration as orchestration_module
 
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
     _FakeSyncWorker.instances = []
     monkeypatch.setattr("src.sync.SyncWorker", _FakeSyncWorker)
 
@@ -588,15 +580,13 @@ def test_sync_endpoint_collect_failure_does_not_block_sync(client, monkeypatch):
 
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456"}),
+        data=json.dumps({}),
         content_type="application/json",
     )
     assert resp.status_code == 200
 
 
 def test_sync_endpoint_sync_failure_returns_500(client, monkeypatch):
-    monkeypatch.setattr("server.crypto.resolve_encryption_key", lambda p, c: b"fake-key")
-
     class FailingSyncWorker:
         def __init__(self, encryption_key):
             pass
@@ -608,7 +598,7 @@ def test_sync_endpoint_sync_failure_returns_500(client, monkeypatch):
 
     resp = client.post(
         "/sync",
-        data=json.dumps({"passphrase": "correct-horse", "totp_code": "123456", "direction": "pull"}),
+        data=json.dumps({"direction": "pull"}),
         content_type="application/json",
     )
     assert resp.status_code == 500

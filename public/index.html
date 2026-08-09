@@ -94,6 +94,17 @@
 
     const LOCAL_STORAGE_KEY = "claude-search-library:unlocked";
 
+    // Timestamps from the API are ISO 8601 UTC (e.g. "...+00:00" - server
+    // and stored data are UTC throughout). Render them in the browser's own
+    // timezone instead of showing raw UTC, which read as "just now" showing
+    // a time hours off from the user's actual local clock.
+    function formatLocalTime(isoString) {
+      if (!isoString) return null;
+      const d = new Date(isoString);
+      if (Number.isNaN(d.getTime())) return isoString;
+      return d.toLocaleString();
+    }
+
     function useDebouncedValue(value, delayMs) {
       const [debounced, setDebounced] = useState(value);
       useEffect(() => {
@@ -249,123 +260,6 @@
       );
     }
 
-    // sessionStorage, not localStorage: cleared when the tab/browser closes,
-    // never written to disk long-term. Holds the passphrase only - never a
-    // TOTP code (those are ~30s one-time codes, caching one is pointless)
-    // and never the derived encryption key itself (server.py still derives
-    // that fresh per /sync call - see resolve_encryption_key's docstring).
-    // This narrows re-auth friction to "one fresh TOTP code per sync" instead
-    // of "passphrase + TOTP every time", while keeping the actual security
-    // property (a live TOTP proof still required every call) intact.
-    const SESSION_PASSPHRASE_KEY = "claude-search-library:session-passphrase";
-
-    function CredentialModal({ title, actionLabel, onSubmit, onClose }) {
-      const [passphrase, setPassphrase] = useState(
-        () => window.sessionStorage.getItem(SESSION_PASSPHRASE_KEY) || ""
-      );
-      const [rememberedPassphrase] = useState(() => Boolean(window.sessionStorage.getItem(SESSION_PASSPHRASE_KEY)));
-      const [totpCode, setTotpCode] = useState("");
-      const [submitting, setSubmitting] = useState(false);
-      const [error, setError] = useState(null);
-
-      const forgetPassphrase = () => {
-        window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
-        setPassphrase("");
-      };
-
-      const handleSubmit = async (e) => {
-        e.preventDefault();
-        setError(null);
-        setSubmitting(true);
-        try {
-          await onSubmit(passphrase, totpCode);
-          // Only cache on success - an unconfirmed passphrase has no
-          // business being remembered, even for one tab session.
-          window.sessionStorage.setItem(SESSION_PASSPHRASE_KEY, passphrase);
-        } catch (err) {
-          // resolve_encryption_key() deliberately never says which factor
-          // was wrong (see crypto.py), so on any failure the safest default
-          // is to drop the cached passphrase and ask for both fields again,
-          // rather than silently retrying a possibly-wrong cached value.
-          window.sessionStorage.removeItem(SESSION_PASSPHRASE_KEY);
-          setError(err.message);
-          setSubmitting(false);
-          return;
-        }
-        setSubmitting(false);
-      };
-
-      return (
-        <div className="modal-overlay fixed inset-0 bg-black/60 flex items-center justify-center z-30 p-4">
-          <form onSubmit={handleSubmit} className="modal bg-surface border border-hairline rounded-lg w-full max-w-sm p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">{title}</h2>
-              <button type="button" className="text-muted hover:text-primary text-2xl leading-none transition-colors" onClick={onClose} aria-label="Close">
-                &times;
-              </button>
-            </div>
-            <p className="text-sm text-muted">
-              {rememberedPassphrase
-                ? "Using this browser tab's remembered passphrase — a fresh authenticator code is still required every time."
-                : "Required every time — nothing is cached between requests. See ROADMAP.md #7 for why."}
-            </p>
-            {rememberedPassphrase ? (
-              <p className="text-xs text-muted">
-                <button type="button" className="text-accent hover:underline" onClick={forgetPassphrase}>
-                  Use a different passphrase
-                </button>
-              </p>
-            ) : (
-              <div>
-                <label className="block text-sm font-medium mb-1 text-muted" htmlFor="sync-passphrase">
-                  Master passphrase
-                </label>
-                <input
-                  id="sync-passphrase"
-                  type="password"
-                  autoComplete="off"
-                  className="w-full bg-surface2 border border-hairline2 rounded px-3 py-2"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium mb-1 text-muted" htmlFor="sync-totp">
-                Authenticator code
-              </label>
-              <input
-                id="sync-totp"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                className="w-full bg-surface2 border border-hairline2 rounded px-3 py-2 tracking-widest text-center font-mono"
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
-                required
-                autoFocus={rememberedPassphrase}
-              />
-            </div>
-            {error && <p className="text-sm text-danger">{error}</p>}
-            <div className="flex gap-2 justify-end">
-              <button type="button" className="px-4 py-2 rounded text-sm bg-surface2 text-muted hover:text-primary transition-colors" onClick={onClose}>
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="px-4 py-2 rounded text-sm bg-accent text-bg disabled:opacity-50 hover:brightness-110 transition"
-              >
-                {submitting ? "Working…" : actionLabel}
-              </button>
-            </div>
-          </form>
-        </div>
-      );
-    }
 
     // Kept in sync with src/orchestration.py's SOURCES tuple - update this
     // list whenever a new collector source is registered there.
@@ -883,7 +777,7 @@
       const [needsReview, setNeedsReview] = useState([]);
       const [error, setError] = useState(null);
       const [refreshing, setRefreshing] = useState(false);
-      const [activeModal, setActiveModal] = useState(null); // "push" | "pull" | "bidirectional" | null
+      const [syncing, setSyncing] = useState(null); // "push" | "pull" | "bidirectional" | null
       const [syncMessage, setSyncMessage] = useState(null);
 
       const costOptions = useCallback(() => {
@@ -923,15 +817,29 @@
         }
       };
 
-      const handleSyncSubmit = async (passphrase, totpCode) => {
-        const direction = activeModal;
-        const result = await apiClient.sync(passphrase, totpCode, direction);
-        setSyncMessage(
-          `${direction}: ${result.files_changed} file(s) changed, ${result.reindexed || 0} reindexed` +
-            (result.conflicts ? `, ${result.conflicts} conflict(s)` : "")
-        );
-        setActiveModal(null);
-        load();
+      const handleSync = async (direction) => {
+        // No credential prompt here anymore - /setup already resolved and
+        // cached the encryption key server-side for this session (see
+        // server.py's _session_keys), so a sync click just needs the
+        // session cookie the browser already sends automatically. This
+        // also means a sync can't silently look "frozen": syncing tracks
+        // which direction is in flight so the clicked button can show a
+        // spinner state, and load() afterward refreshes "Last sync" so it
+        // never gets stuck on "Never".
+        setSyncing(direction);
+        setSyncMessage(null);
+        try {
+          const result = await apiClient.sync(direction);
+          setSyncMessage(
+            `${direction}: ${result.files_changed} file(s) changed, ${result.reindexed || 0} reindexed` +
+              (result.conflicts ? `, ${result.conflicts} conflict(s)` : "")
+          );
+        } catch (err) {
+          setSyncMessage(`Error: ${err.message}`);
+        } finally {
+          setSyncing(null);
+          load();
+        }
       };
 
       const [reprocessing, setReprocessing] = useState(null); // session_id being reprocessed, "*" for all, or null
@@ -942,7 +850,7 @@
         // once per pending session with no per-click undo, unlike a
         // single "Reprocess" which is one already-visible session - a
         // confirm() here brings its weight in line with Sync's
-        // CredentialModal gate instead of firing on the first click with
+        // Sync buttons' own weight instead of firing on the first click with
         // only the on-screen count as its confirmation. Found via a
         // Design Critic pass (2026-08-06): the two flows had inconsistent
         // confirmation weight for actions of a similar real (dollar) cost.
@@ -979,7 +887,7 @@
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted">Last sync</p>
-                <p className="font-medium font-mono">{stats?.last_sync || "Never"}</p>
+                <p className="font-medium font-mono">{formatLocalTime(stats?.last_sync) || "Never"}</p>
               </div>
               <div className="flex items-center gap-2">
                 <HealthBadge health={health} />
@@ -996,10 +904,11 @@
               {syncButtons.map((b) => (
                 <button
                   key={b.direction}
-                  className="flex-1 bg-accent text-bg rounded px-3 py-2 text-sm font-medium hover:brightness-110 transition"
-                  onClick={() => setActiveModal(b.direction)}
+                  className="flex-1 bg-accent text-bg rounded px-3 py-2 text-sm font-medium hover:brightness-110 transition disabled:opacity-50"
+                  onClick={() => handleSync(b.direction)}
+                  disabled={syncing !== null}
                 >
-                  {b.label}
+                  {syncing === b.direction ? "Syncing…" : b.label}
                 </button>
               ))}
             </div>
@@ -1013,7 +922,7 @@
               <div key={d.device_id} className="bg-surface rounded-lg border border-hairline p-4 flex justify-between">
                 <div>
                   <p className="font-medium">{d.device_name || d.device_id}</p>
-                  <p className="text-xs text-muted font-mono">Last sync: {d.last_sync_at || "Never"}</p>
+                  <p className="text-xs text-muted font-mono">Last sync: {formatLocalTime(d.last_sync_at) || "Never"}</p>
                 </div>
                 {d.pending_changes > 0 && (
                   <span className="text-xs bg-accent/15 text-accent rounded-full px-2 py-1 self-start">
@@ -1113,14 +1022,6 @@
             <ImportDropzone onImported={load} />
           </div>
 
-          {activeModal && (
-            <CredentialModal
-              title={`Confirm ${activeModal}`}
-              actionLabel={syncButtons.find((b) => b.direction === activeModal).label}
-              onSubmit={handleSyncSubmit}
-              onClose={() => setActiveModal(null)}
-            />
-          )}
         </div>
       );
     }
@@ -1139,7 +1040,7 @@
       return (
         <footer className="sticky bottom-0 bg-surface/95 backdrop-blur border-t border-hairline px-4 py-2 text-xs text-muted font-mono flex flex-wrap gap-x-4 gap-y-1 justify-center sm:justify-start">
           <span>{stats.total_sessions ?? 0} sessions indexed</span>
-          <span>last sync: {stats.last_sync || "never"}</span>
+          <span>last sync: {formatLocalTime(stats.last_sync) || "never"}</span>
           <span
             className={health?.healthy === false ? "text-danger" : "text-success"}
             title={health?.healthy === false ? (health.errors || []).concat(health.warnings || []).join("\n") : undefined}

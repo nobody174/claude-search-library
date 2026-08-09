@@ -10,6 +10,7 @@
 """Flask REST API server for Claude Search Library."""
 from __future__ import annotations
 
+import os
 import secrets
 import time
 from pathlib import Path
@@ -83,13 +84,32 @@ CORS(app, origins=[])
 #
 # In-memory only (not persisted) - a server restart requires re-unlocking,
 # which is the right failure mode for a security boundary. Token ->
-# expiry timestamp; SESSION_TTL_SECONDS matches crypto.py's existing
-# SESSION_CACHE_TTL_SECONDS convention for "how long is a personal-machine
-# unlock considered valid" so the two don't drift out of sync with each
-# other for no reason.
+# expiry timestamp.
+#
+# Configurable, default 12h ("half a day"): originally 30 minutes, and
+# /sync separately demanded a *fresh* passphrase+TOTP on every single
+# call regardless of this session's age at all (see sync_endpoint's old
+# docstring/_session_keys below) - a real, explicit user complaint after
+# living with it day-to-day across two devices: re-entering a TOTP code
+# for every routine sync click is real friction with a personal-machine
+# tool used many times a day, not a meaningful security improvement once
+# the session gate itself already requires proving both factors to get
+# in at all. This is a conscious trade of some security margin for real
+# daily usability, made explicitly by the user, not a default anyone
+# should assume - see CSL_SESSION_TTL_HOURS to change it back down (or
+# further up) per-deployment.
 SESSION_COOKIE_NAME = "csl_session"
-SESSION_TTL_SECONDS = 30 * 60
+SESSION_TTL_SECONDS = int(os.environ.get("CSL_SESSION_TTL_HOURS", "12")) * 3600
 _sessions: dict[str, float] = {}
+
+# The actual derived Fernet encryption key, cached alongside the session
+# so /sync can use it directly instead of demanding passphrase+totp_code
+# on every call - see sync_endpoint. Same lifetime/invalidation as
+# _sessions (created together in setup_endpoint, cleared together in
+# _invalidate_session/_prune_stale_entries). This is real key material,
+# not a token - it's what actually decrypts your synced data. In memory
+# only, never persisted to disk, same as everything else here.
+_session_keys: dict[str, bytes] = {}
 
 # Both _sessions and _setup_attempts only ever dropped entries lazily, on
 # next access to that *same* token/IP - an expired session nobody re-checks,
@@ -113,6 +133,7 @@ def _prune_stale_entries() -> None:
     for token, expiry in list(_sessions.items()):
         if now > expiry:
             del _sessions[token]
+            _session_keys.pop(token, None)
     cutoff = now - SETUP_LOCKOUT_SECONDS
     for ip, attempts in list(_setup_attempts.items()):
         recent = [t for t in attempts if t > cutoff]
@@ -145,6 +166,7 @@ def _session_valid(token: Optional[str]) -> bool:
 def _invalidate_session(token: Optional[str]) -> None:
     if token:
         _sessions.pop(token, None)
+        _session_keys.pop(token, None)
 
 
 # --- /setup brute-force protection --------------------------------------
@@ -267,9 +289,25 @@ def setup_endpoint():
         return jsonify({"success": False, "error": "invalid TOTP code"}), 401
 
     _clear_setup_failures(ip)
+
+    # Derive and cache the real encryption key now, under the same token
+    # this session gets - this is what lets /sync skip asking for
+    # passphrase+totp_code again for the rest of this session's lifetime
+    # (see SESSION_TTL_SECONDS/_session_keys above). Re-verifies via
+    # resolve_encryption_key() rather than reusing totp_secret/passphrase
+    # from above - slightly redundant (an extra fetch+decrypt+verify
+    # pass) but keeps this endpoint's existing 401 error messages/shape
+    # untouched rather than risking a subtler refactor.
+    token = _create_session()
+    try:
+        _session_keys[token] = crypto.resolve_encryption_key(passphrase, totp_code)
+    except ValueError:
+        _invalidate_session(token)
+        return jsonify({"success": False, "error": "invalid passphrase or TOTP code"}), 401
+
     response = jsonify({"success": True})
     response.set_cookie(
-        SESSION_COOKIE_NAME, _create_session(),
+        SESSION_COOKIE_NAME, token,
         max_age=SESSION_TTL_SECONDS, httponly=True, samesite="Strict",
         # secure=True whenever the request actually arrived over HTTPS, so
         # this automatically tightens if TLS is ever added, without
@@ -402,44 +440,54 @@ def related_sessions_endpoint(session_id: str):
 def stats_endpoint():
     with Storage() as db:
         stats = db.get_stats()
-        rows = db.conn.execute(
-            "SELECT MAX(last_sync_at) as last_sync FROM sync_metadata"
-        ).fetchone()
 
-    stats["last_sync"] = rows["last_sync"] if rows else None
+    # Same class of bug as /health's devices_registered fix: real device
+    # sync state lives in sync.py's sync_metadata.json inside the git
+    # repo, not the SQL sync_metadata table (nothing has ever written to
+    # that table - it's been permanently empty since before this project
+    # had real multi-device usage). "Last sync: never" persisted even
+    # after a real, successful sync because of this exact gap.
+    stats["last_sync"] = None
+    try:
+        from src.sync import DEFAULT_REPO_PATH, _read_sync_metadata
+
+        metadata = _read_sync_metadata(DEFAULT_REPO_PATH)
+        last_syncs = [d.get("last_sync_at") for d in metadata.get("devices", {}).values() if d.get("last_sync_at")]
+        if last_syncs:
+            stats["last_sync"] = max(last_syncs)
+    except Exception as e:
+        app.logger.warning("Failed to read real last_sync from sync_metadata.json: %s", e)
+
     return jsonify(stats)
 
 
 @app.route("/sync", methods=["POST"])
 def sync_endpoint():
-    """POST /sync {passphrase, totp_code, direction}
+    """POST /sync {direction}
 
     direction: "pull" | "push" | "bidirectional" (default).
 
-    Credentials are required on every call and are never cached
-    server-side between requests — see crypto.resolve_encryption_key's
-    docstring for why. This is a deliberate tradeoff (re-auth on every
-    sync click) accepted because server.py binds 0.0.0.0 by default for
-    LAN/phone access, and an already-cached key would let anyone on the
-    same network trigger a real sync without ever proving they know the
-    passphrase or TOTP.
+    The encryption key is no longer taken from the request body. It's
+    resolved once at /setup time and cached in _session_keys under the
+    caller's session token for as long as that session lives (see
+    SESSION_TTL_SECONDS) — this is what lets a login be reused across
+    repeated sync clicks instead of asking for passphrase+TOTP every
+    time, per explicit user request. The session cookie itself is still
+    required and validated by _require_session() (@app.before_request),
+    so an unauthenticated caller still can't trigger a sync.
     """
     from src.sync import SyncWorker
 
     body = request.get_json(silent=True) or {}
-    passphrase = body.get("passphrase")
-    totp_code = body.get("totp_code")
     direction = body.get("direction", "bidirectional")
 
-    if not passphrase or not totp_code:
-        return jsonify({"error": "passphrase and totp_code are required"}), 400
     if direction not in ("pull", "push", "bidirectional"):
         return jsonify({"error": "direction must be 'pull', 'push', or 'bidirectional'"}), 400
 
-    try:
-        encryption_key = crypto.resolve_encryption_key(passphrase, totp_code)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 401
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    encryption_key = _session_keys.get(token)
+    if encryption_key is None:
+        return jsonify({"error": "no cached credentials for this session — please log in again"}), 401
 
     # Collect from every local source first - notably the claude-desktop
     # collector, whose freshly-cached conversations only exist on this
@@ -770,7 +818,15 @@ def main() -> None:
 
     scheme = "https" if ssl_context else "http"
     print(f"Starting Claude Search Library on {scheme}://{args.host}:{args.port} ...")
-    app.run(host=args.host, port=args.port, ssl_context=ssl_context)
+    # threaded=True: without this, Werkzeug's dev server handles exactly
+    # one request at a time. The Sync page fires 5 concurrent requests on
+    # load (devices/stats/health/costs/review) and the browser sends them
+    # all at once, but the server queued them one-by-one - and a real,
+    # slow request (like /sync itself, doing a real GitHub push/pull) blocked
+    # every other request behind it, including simple ones like /health,
+    # making the whole page feel frozen while a sync ran. Found via a real
+    # user report of laggy Sync-page buttons, not a synthetic benchmark.
+    app.run(host=args.host, port=args.port, ssl_context=ssl_context, threaded=True)
 
 
 if __name__ == "__main__":

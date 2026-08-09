@@ -683,6 +683,18 @@ def collect_from_claude_android(address: Optional[str] = None) -> list[dict]:
     """
     from src.collector import normalize_session
 
+    # Materialize each conversation under raw_exports/claude-android/, same
+    # as every other collector (see collect_from_claude_code()'s export_dir
+    # for the pattern) - without this, raw_file_path was left None on every
+    # android session, which meant a session that failed processing (or
+    # simply never got its first pass in before the app was closed) could
+    # never be reprocessed: process_batch() has nothing to re-read. Found
+    # via 7 real stuck claude-android sessions in production, all with
+    # raw_file_path: None, discovered while diagnosing why "Reprocess"
+    # silently did nothing for them.
+    export_dir = Path.home() / ".claude-search-library" / "data" / "raw_exports" / "claude-android"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         device = connect_device(address)
     except AndroidNotConnectedError:
@@ -711,7 +723,21 @@ def collect_from_claude_android(address: Optional[str] = None) -> list[dict]:
     for conv in conversations:
         try:
             raw = extract_conversation(device, conv)
-            sessions.append(normalize_session(raw, "claude-android", "android-bridge"))
+            # normalize_session() derives the session id from a content
+            # hash when raw["id"] is None (always true here - see
+            # messages_to_raw_export()) - so the id is only known after
+            # this call, hence writing the raw file after normalizing
+            # rather than before, unlike collect_from_claude_code()'s
+            # write-then-normalize order.
+            session = normalize_session(raw, "claude-android", "android-bridge")
+            out_path = export_dir / f"{session['id']}.json"
+            try:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(raw, f)
+                session["raw_path"] = str(out_path)
+            except OSError as e:
+                logger.warning("Failed to write raw export for %r: %s", conv["title"], e)
+            sessions.append(session)
         except AndroidUIElementNotFoundError as e:
             logger.warning("Failed to extract conversation %r: %s", conv["title"], e)
             continue

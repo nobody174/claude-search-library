@@ -437,6 +437,45 @@ class SyncWorker:
                     files_changed += 1
             db.conn.commit()
 
+        # Raw chat files: push_to_github() has always uploaded these
+        # (ENCRYPTED_RAW_CHATS_DIR), but until now pull_from_github() never
+        # downloaded them back down - a session's raw_file_path arrives via
+        # the changeset above unchanged, still pointing at the PUSHING
+        # device's local filesystem path, which is meaningless here. That
+        # silently broke Reprocess for any session pulled from another
+        # device (found via real stuck sessions in production, e.g.
+        # raw_file_path: "C:\\Users\\Vartd\\..." showing up on a laptop).
+        # Fixed by decrypting every raw file and re-pointing raw_file_path
+        # at a local copy, materialized under this device's own
+        # raw_exports/<source>/ - same directory convention every collector
+        # already uses (see collector.py's export_dir pattern).
+        raw_dir = self.repo_path / ENCRYPTED_RAW_CHATS_DIR
+        if raw_dir.exists():
+            with Storage(self.db_path) as db:
+                for enc_path in sorted(raw_dir.glob("*_raw.enc")):
+                    session_id = enc_path.name[: -len("_raw.enc")]
+                    row = db.conn.execute(
+                        "SELECT source FROM sessions WHERE id = ?", (session_id,)
+                    ).fetchone()
+                    if not row:
+                        continue  # session not yet known locally - a later pull will catch it once its changeset lands
+
+                    export_dir = Path.home() / ".claude-search-library" / "data" / "raw_exports" / row["source"]
+                    local_path = export_dir / f"{session_id}.json"
+                    if local_path.exists():
+                        continue  # already materialized locally - avoid re-decrypting every pull
+
+                    try:
+                        decrypted = crypto.decrypt_data(enc_path.read_text(encoding="utf-8"), self.encryption_key)
+                    except Exception as e:
+                        logger.warning("Failed to decrypt raw chat file %s: %s", enc_path, e)
+                        continue
+
+                    export_dir.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(decrypted)
+                    db.update_session(session_id, {"raw_file_path": str(local_path)})
+                db.conn.commit()
+
         _update_device_metadata(self.repo_path, pending_changes=0)
 
         reindexed = 0
