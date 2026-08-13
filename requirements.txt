@@ -8,7 +8,7 @@ python-dotenv>=1.0.0
 # Encryption & Security
 cryptography>=50.0.0
 pyotp>=2.9.0
-argon2-cffi>=23.1.0
+argon2-cffi>=25.1.0
 qrcode>=7.4.0
 
 # APIs & HTTP
