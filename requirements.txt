@@ -3,7 +3,7 @@
 
 # Core
 anthropic>=0.7.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 
 # Encryption & Security
 cryptography>=50.0.0
