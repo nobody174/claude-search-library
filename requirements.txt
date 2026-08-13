@@ -18,7 +18,7 @@ requests>=2.31.0
 gitpython>=3.1.0
 
 # Data Processing
-pyyaml>=6.0
+pyyaml>=6.0.3
 
 # ChromaDB & Embeddings
 chromadb>=0.4.0
