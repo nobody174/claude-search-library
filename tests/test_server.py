@@ -32,6 +32,12 @@ def client(tmp_path, monkeypatch):
         lambda fail_fast=False: {"new": 0, "errors": 0, "total": 0, "sources": {}},
     )
 
+    # /stats and /devices read device sync state from sync_metadata.json in
+    # the git repo (see server.py's comments), not the SQL sync_metadata
+    # table - point that at an isolated tmp path same as the DB above.
+    import src.sync as sync_module
+    monkeypatch.setattr(sync_module, "DEFAULT_REPO_PATH", tmp_path)
+
     server.app.config["TESTING"] = True
     with server.app.test_client() as c:
         # Every route except /setup and the static/index routes now
@@ -278,7 +284,22 @@ def test_stats_endpoint(client):
     assert data["total_sessions"] == 2
     assert data["by_source"]["claude-ai"] == 1
     assert data["by_status"]["needs_review"] == 1
-    assert "last_sync" in data
+    assert data["last_sync"] is None
+
+
+def test_stats_endpoint_reports_last_sync_from_sync_metadata_json(client, tmp_path):
+    from src.sync import _write_sync_metadata
+
+    _write_sync_metadata(tmp_path, {
+        "devices": {
+            "dev1": {"last_sync_at": "2026-07-31T14:00:00Z"},
+            "dev2": {"last_sync_at": "2026-08-01T09:00:00Z"},
+        },
+    })
+
+    resp = client.get("/stats")
+    assert resp.status_code == 200
+    assert resp.get_json()["last_sync"] == "2026-08-01T09:00:00Z"
 
 
 def test_health_endpoint_healthy_returns_200(client):
@@ -315,13 +336,18 @@ def test_health_endpoint_exception_returns_500(client, monkeypatch):
     assert resp.get_json()["healthy"] is False
 
 
-def test_devices_endpoint(client):
-    with Storage() as db:
-        db.conn.execute(
-            "INSERT INTO sync_metadata (device_id, device_name, last_sync_at, pending_changes) "
-            "VALUES ('dev1', 'Desktop', '2026-07-31T14:00:00Z', 0)"
-        )
-        db.conn.commit()
+def test_devices_endpoint(client, tmp_path):
+    from src.sync import _write_sync_metadata
+
+    _write_sync_metadata(tmp_path, {
+        "devices": {
+            "dev1": {
+                "device_name": "Desktop",
+                "last_sync_at": "2026-07-31T14:00:00Z",
+                "pending_changes": 0,
+            },
+        },
+    })
 
     resp = client.get("/devices")
     assert resp.status_code == 200

@@ -441,22 +441,23 @@ def stats_endpoint():
     with Storage() as db:
         stats = db.get_stats()
 
-    # Same class of bug as /health's devices_registered fix: real device
-    # sync state lives in sync.py's sync_metadata.json inside the git
-    # repo, not the SQL sync_metadata table (nothing has ever written to
-    # that table - it's been permanently empty since before this project
-    # had real multi-device usage). "Last sync: never" persisted even
-    # after a real, successful sync because of this exact gap.
-    stats["last_sync"] = None
+    # Real device sync timestamps live in sync.py's sync_metadata.json
+    # inside the git repo, not the SQL sync_metadata table - see /health's
+    # devices_registered comment. That SQL table is never written by any
+    # sync code path, so MAX(last_sync_at) from it is always NULL; read
+    # the JSON file instead so this reflects an actual completed sync.
     try:
         from src.sync import DEFAULT_REPO_PATH, _read_sync_metadata
 
         metadata = _read_sync_metadata(DEFAULT_REPO_PATH)
-        last_syncs = [d.get("last_sync_at") for d in metadata.get("devices", {}).values() if d.get("last_sync_at")]
-        if last_syncs:
-            stats["last_sync"] = max(last_syncs)
+        timestamps = [
+            d["last_sync_at"] for d in metadata.get("devices", {}).values()
+            if d.get("last_sync_at")
+        ]
+        stats["last_sync"] = max(timestamps) if timestamps else None
     except Exception as e:
-        app.logger.warning("Failed to read real last_sync from sync_metadata.json: %s", e)
+        app.logger.warning("Failed to read last_sync from sync_metadata.json: %s", e)
+        stats["last_sync"] = None
 
     return jsonify(stats)
 
@@ -630,19 +631,24 @@ def costs_endpoint():
 
 @app.route("/devices", methods=["GET"])
 def devices_endpoint():
-    with Storage() as db:
-        # Explicit column allowlist (not SELECT *) - Security Auditor
-        # finding (2026-08-06): SELECT * silently re-exposes any future
-        # column added to sync_metadata to every authenticated caller of
-        # this endpoint, with nobody having to remember to update this
-        # query when the schema changes. Today's columns are all benign
-        # sync bookkeeping, but this is a deliberate ceiling, not an
-        # accident of what happens to exist right now.
-        rows = db.conn.execute(
-            "SELECT device_id, device_name, last_sync_at, last_heartbeat, "
-            "pending_changes, is_hub FROM sync_metadata"
-        ).fetchall()
-    return jsonify({"devices": [dict(r) for r in rows]})
+    # Real device registration lives in sync.py's sync_metadata.json inside
+    # the git repo, not the SQL sync_metadata table - see /health and
+    # /stats's comments. That SQL table is never written by any sync code
+    # path, so reading it here always returned zero real devices.
+    from src.sync import DEFAULT_REPO_PATH, _read_sync_metadata
+
+    metadata = _read_sync_metadata(DEFAULT_REPO_PATH)
+    devices = [
+        {
+            "device_id": device_id,
+            "device_name": entry.get("device_name", device_id),
+            "last_sync_at": entry.get("last_sync_at"),
+            "last_heartbeat": entry.get("last_heartbeat"),
+            "pending_changes": entry.get("pending_changes", 0),
+        }
+        for device_id, entry in metadata.get("devices", {}).items()
+    ]
+    return jsonify({"devices": devices})
 
 
 @app.route("/health", methods=["GET"])
