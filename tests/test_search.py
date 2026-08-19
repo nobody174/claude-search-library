@@ -121,6 +121,43 @@ def test_keyword_search_like_link_to_raw(db_path):
     assert results[0]["link_to_raw"] == "file:///raw/s1.json"
 
 
+def test_recent_sessions_orders_newest_first(db_path):
+    with Storage(db_path) as db:
+        db.insert_session(_session("old", created_at="2026-01-01T00:00:00+00:00"))
+        db.insert_session(_session("new", created_at="2026-07-01T00:00:00+00:00"))
+
+    results = search.recent_sessions(db_path=db_path)
+    assert [r["session_id"] for r in results] == ["new", "old"]
+    assert results[0]["search_type"] == "recent"
+
+
+def test_recent_sessions_respects_top_k(db_path):
+    with Storage(db_path) as db:
+        for i in range(5):
+            db.insert_session(_session(f"s{i}", created_at=f"2026-01-0{i+1}T00:00:00+00:00"))
+
+    results = search.recent_sessions(top_k=2, db_path=db_path)
+    assert len(results) == 2
+
+
+def test_recent_sessions_applies_filters(db_path):
+    with Storage(db_path) as db:
+        db.insert_session(_session("s1", source="claude-ai"))
+        db.insert_session(_session("s2", source="vscode"))
+
+    results = search.recent_sessions(filters={"source": "vscode"}, db_path=db_path)
+    assert [r["session_id"] for r in results] == ["s2"]
+
+
+def test_search_with_blank_query_returns_recent_sessions(db_path):
+    with Storage(db_path) as db:
+        db.insert_session(_session("s1"))
+
+    results = search.search("", mode="hybrid", db_path=db_path)
+    assert results[0]["session_id"] == "s1"
+    assert results[0]["search_type"] == "recent"
+
+
 def test_semantic_search_enriches_with_sqlite(db_path, monkeypatch):
     with Storage(db_path) as db:
         db.insert_session(_session("s1"))

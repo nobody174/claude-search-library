@@ -170,9 +170,18 @@ def test_src_assets_serves_api_js(client):
     assert b"ClaudeSearchAPI" in resp.data
 
 
-def test_search_endpoint_missing_query_returns_400(client):
+def test_search_endpoint_missing_query_returns_recent_sessions(client, monkeypatch):
+    monkeypatch.setattr(
+        "server.run_search",
+        lambda query, mode="semantic", top_k=10, filters=None: [
+            {"session_id": "s1", "search_type": "recent"}
+        ],
+    )
     resp = client.get("/search")
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["query"] == ""
+    assert body["results"][0]["search_type"] == "recent"
 
 
 def test_search_endpoint_returns_results(client, monkeypatch):

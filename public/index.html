@@ -549,10 +549,6 @@
       }, []);
 
       useEffect(() => {
-        if (!debouncedQuery.trim()) {
-          setResults([]);
-          return;
-        }
         let cancelled = false;
         setLoading(true);
         setError(null);
@@ -640,7 +636,6 @@
       function ResultsColumn() {
         if (loading) return <p className="text-sm text-muted font-mono">Searching…</p>;
         if (error) return <p className="text-sm text-danger">{error}</p>;
-        if (!query.trim()) return <p className="text-sm text-muted/70">Start typing to search.</p>;
         if (results.length === 0) return <p className="text-sm text-muted/70">No results found.</p>;
 
         const MIN_RELEVANCE = 0.2;

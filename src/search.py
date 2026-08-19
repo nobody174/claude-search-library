@@ -219,6 +219,35 @@ def keyword_search_like(
     return results
 
 
+def recent_sessions(top_k: int = 10, filters: Optional[dict] = None, db_path: Optional[str] = None) -> list:
+    """Most recently created sessions, newest first - used for a blank query.
+
+    Not a search at all (no ranking signal), so relevance_score is fixed at
+    1.0 for every result and search_type is "recent" rather than "semantic"/
+    "keyword", so callers/UI can tell the difference from an actual match.
+    """
+    with Storage(db_path) as db:
+        rows = db.conn.execute(
+            "SELECT id FROM sessions ORDER BY created_at DESC LIMIT ?",
+            (top_k * 3 if filters else top_k,),
+        ).fetchall()
+
+        results = []
+        for row in rows:
+            built = _build_result(row["id"], 1.0, db)
+            if built is None:
+                continue
+            result, session, summary = built
+            if not _matches_filters(session, summary, filters or {}):
+                continue
+            result["search_type"] = "recent"
+            results.append(result)
+            if len(results) >= top_k:
+                break
+
+    return results
+
+
 def hybrid_search(
     query: str,
     top_k: int = 10,
@@ -269,11 +298,18 @@ def search(
     db_path: Optional[str] = None,
     chroma_path: Optional[str] = None,
 ) -> list:
-    """Route to semantic, keyword, or hybrid search, applying filters and logging."""
+    """Route to semantic, keyword, or hybrid search, applying filters and logging.
+
+    An empty/blank query returns the most recent sessions instead of
+    searching - mode is ignored in that case, since there's no query to
+    rank against.
+    """
     _setup_file_logging()
     start = time.monotonic()
 
-    if mode == "keyword":
+    if not query.strip():
+        results = recent_sessions(top_k=top_k, filters=filters, db_path=db_path)
+    elif mode == "keyword":
         results = keyword_search(query, top_k=top_k, filters=filters, db_path=db_path)
     elif mode == "hybrid":
         results = hybrid_search(query, top_k=top_k, filters=filters, db_path=db_path, chroma_path=chroma_path)

@@ -346,6 +346,8 @@ def search_endpoint():
     mode: "semantic" (ChromaDB, by meaning) | "keyword" (FTS5, fast) |
     "hybrid" (both, default — semantic results preferred, FTS5 fills gaps
     when semantic is slow or sparse; see src/search.py::hybrid_search).
+    An empty/omitted q returns the most recent sessions instead of
+    searching (mode is ignored in that case).
 
     filters: optional JSON object matching src/search.py's filter shape,
     e.g. {"source": "claude-code", "device": "desktop",
@@ -364,9 +366,6 @@ def search_endpoint():
             filters = _json.loads(raw_filters)
         except ValueError:
             return jsonify({"error": "'filters' must be valid JSON"}), 400
-
-    if not query:
-        return jsonify({"error": "missing required query parameter 'q'"}), 400
 
     start = time.monotonic()
     results = run_search(query, mode=mode, top_k=top_k, filters=filters)
